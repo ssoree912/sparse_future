@@ -58,9 +58,9 @@ Collects eviction labels under the deployment protocol rather than the legacy on
 and four per-layer targets: attention summed over still-masked rows, summed over all rows,
 max over steps and rows, and the deployment heuristic's own score for reference.
 
-This differs from the legacy teacher in ways that each matter:
+This differs from the pipeline under diagnosis in ways that each matter:
 
-| | legacy | here |
+| | `teacher/attention_delta/` | `teacher/extract_block_cache_teacher.py` |
 |---|---|---|
 | columns scored | prompt only | prompt + suffix |
 | aggregation unit | whole answer | one block |
@@ -73,22 +73,29 @@ This differs from the legacy teacher in ways that each matter:
 `student_model.py` is the per-layer scorer, `training_loop.py` builds features and targets
 and runs the loss, `train_student.py` / `train_config.py` are the CLI. This is the code
 that produced the deployed checkpoint, kept here because the numbers above came from it —
-not because it is the design being kept. Two definitions in it are the reason the scorer
-collapses at keep 0.1:
+not because it is the design being kept. Two definitions in it are candidate reasons the
+scorer collapses at keep 0.1:
 
 - `compute_prompt_hidden_states` (`training_loop.py`) runs the model on **prompt tokens
   only**, while at inference the scorer consumes hidden states from a full
   prompt+generation forward captured at `cache_state==1`. LLaDA attends bidirectionally,
   so the mask region changes even the prompt representations — the scorer is deployed on
   inputs it never saw.
-- targets come from the legacy teacher below, which scores prompt columns only.
+- targets come from the teacher below, which scores prompt columns only.
 
-### `teacher/legacy/` — the teacher the deployed checkpoint was trained on
+### `teacher/attention_delta/` — the teacher pipeline currently under diagnosis
 
-Kept for comparison. `offline_hybrid_teacher.py` computes attention over the whole
-sequence and then discards the suffix half at the last moment
-(`attention[:, :, :, :prompt_length]`), aggregates over the entire answer rather than per
-block, and was run at `block_length=8`.
+This is the extraction chain that produced the deployed checkpoint, not dead code.
+`extract_offline_hybrid_from_shards.py` drives generation from prompt-source shards and
+`offline_hybrid_teacher.py` collects the two targets: commit-time attention and cumulative
+prompt K/V movement (the delta head, unused at inference today).
+
+Three definitions in it are what the block-wise collector is meant to replace.
+`_capture_reference` computes attention over the whole sequence and then discards the
+suffix half at the last moment (`attention[:, :, :, :prompt_length]`), so suffix columns
+have no labels at all. Aggregation runs over the entire answer rather than per block, so a
+label cannot express what one block needs next. And the checkpoint's teacher was extracted
+at `block_length=8` while deployment decodes at 32.
 
 ### `configs/` — OpenCompass model configs
 
@@ -109,7 +116,7 @@ its partial predictions.
 | oracle harness (block and per-step) | implemented, validated at `keep=1.0`, block oracle measured |
 | block-wise teacher collector | written, statically checked, **not run yet** |
 | ratio-agnostic scorer training | **not written** — waiting on the oracle verdict |
-| legacy student + teacher | included as-is, for reference |
+| current student + teacher pipeline | included as-is, under diagnosis |
 
 The scorer redesign is deliberately blocked on the oracle numbers. If a perfect scorer
 only reaches ~34.6 at keep 0.1, retraining against a better teacher cannot reach the 38.14
