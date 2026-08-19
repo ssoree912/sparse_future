@@ -57,6 +57,28 @@ The absolute drop on the full set is truncation, not eviction: those contexts ar
 tokens median against LLaDA's 4096 limit, so the needle is often cut before decoding
 starts. Both methods face it equally.
 
+## MATH-500 — the regime where eviction actually breaks
+
+Both LongBench tasks feed a long prompt and generate little, so nearly every eviction
+candidate is input text. MATH-500 inverts that: the problem is ~40 tokens and the answer
+is hundreds, so the candidates are the model's own partially written derivation. Keeping
+10% means keeping ~26 of ~264 tokens of your own reasoning.
+
+| setting (100 problems, gen 256) | accuracy |
+|---|---|
+| no eviction (`keep=1.0`) | **27.0** |
+| keep 0.1 | **1.0** |
+| keep 0.1, block oracle | **1.0** |
+| keep 0.1, re-selection every 8 steps | **2.0** |
+
+Eviction is fatal here and neither perfect selection nor re-selection recovers anything —
+they produce different answers (only 19/100 and 16/100 predictions match the baseline) and
+all of them are wrong. This is a capacity wall, not a selection problem, and it is the
+sharpest evidence that what matters is *how much* is kept rather than *which* tokens.
+
+`scripts/run_math500_sparse.py` runs the variants in one process (chat template, boxed
+answer extraction with sympy fallback, per-variant accuracy / latency / peak GPU memory).
+
 ## What is in here
 
 ### `sparse_dllm/` — instrumented model code
