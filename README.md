@@ -67,9 +67,16 @@ is hundreds, so the candidates are the model's own partially written derivation.
 | setting (100 problems, gen 256) | accuracy |
 |---|---|
 | no eviction (`keep=1.0`) | **27.0** |
+| keep 0.5 (the repo default) | **27.0** |
+| keep 0.3 | **7.0** |
 | keep 0.1 | **1.0** |
 | keep 0.1, block oracle | **1.0** |
 | keep 0.1, re-selection every 8 steps | **2.0** |
+
+The cliff sits between 0.5 and 0.3. At the shipped default nothing is lost — note the
+answers are almost entirely different text (2/100 identical to the uncompressed run) yet
+the same number of them are right, so eviction perturbs the derivation without breaking
+it. Below that the task collapses.
 
 Eviction is fatal here and neither perfect selection nor re-selection recovers anything —
 they produce different answers (only 19/100 and 16/100 predictions match the baseline) and
