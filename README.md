@@ -68,6 +68,28 @@ This differs from the legacy teacher in ways that each matter:
 | feature source | prompt-only forward | full prompt+generation forward, replayed |
 | block length | 8 | 32 |
 
+### `student/` — scorer training pipeline (as it stands today)
+
+`student_model.py` is the per-layer scorer, `training_loop.py` builds features and targets
+and runs the loss, `train_student.py` / `train_config.py` are the CLI. This is the code
+that produced the deployed checkpoint, kept here because the numbers above came from it —
+not because it is the design being kept. Two definitions in it are the reason the scorer
+collapses at keep 0.1:
+
+- `compute_prompt_hidden_states` (`training_loop.py`) runs the model on **prompt tokens
+  only**, while at inference the scorer consumes hidden states from a full
+  prompt+generation forward captured at `cache_state==1`. LLaDA attends bidirectionally,
+  so the mask region changes even the prompt representations — the scorer is deployed on
+  inputs it never saw.
+- targets come from the legacy teacher below, which scores prompt columns only.
+
+### `teacher/legacy/` — the teacher the deployed checkpoint was trained on
+
+Kept for comparison. `offline_hybrid_teacher.py` computes attention over the whole
+sequence and then discards the suffix half at the last moment
+(`attention[:, :, :, :prompt_length]`), aggregates over the entire answer rather than per
+block, and was run at `block_length=8`.
+
 ### `configs/` — OpenCompass model configs
 
 One per row of the results table. Use with
@@ -79,6 +101,26 @@ One per row of the results table. Use with
 student/oracle code paths hit an intermittent segfault inside `libcuda.so` (same faulting
 offset every time, no NVRM Xid, not data-dependent) and OpenCompass resumes cleanly from
 its partial predictions.
+
+## Status — what is and is not done
+
+| piece | state |
+|---|---|
+| oracle harness (block and per-step) | implemented, validated at `keep=1.0`, block oracle measured |
+| block-wise teacher collector | written, statically checked, **not run yet** |
+| ratio-agnostic scorer training | **not written** — waiting on the oracle verdict |
+| legacy student + teacher | included as-is, for reference |
+
+The scorer redesign is deliberately blocked on the oracle numbers. If a perfect scorer
+only reaches ~34.6 at keep 0.1, retraining against a better teacher cannot reach the 38.14
+of the uncompressed model, and the useful intervention is structural (how often the kept
+set is re-chosen, whether stale entries are refreshed) rather than predictive.
+
+When it is written, the scorer is to be trained as a **continuous, budget-independent
+ranker** — no `keep_ratio` baked into the objective, listwise targets in rank or log space
+so the loss does not collapse onto the head of the attention distribution, pairwise terms
+sampled across the whole range, and checkpoint selection on a k-grid (0.05/0.1/0.2/0.3/0.5)
+rather than any single operating point.
 
 ## Gotcha worth knowing
 
