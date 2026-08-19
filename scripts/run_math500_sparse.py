@@ -90,7 +90,8 @@ def equivalent(pred: str, gold: str) -> bool:
 def build_variant(name: str) -> dict:
     """Map a variant name to the knobs generate() takes."""
     cfg = {'keep_ratio': 1.0, 'oracle_eviction': False, 'oracle_pool': True,
-           'oracle_per_step': False, 'oracle_reselect_every': 1, 'reselect_every': 0}
+           'oracle_per_step': False, 'oracle_reselect_every': 1, 'reselect_every': 0,
+           'reselect_offload_v': False, 'reselect_k_bits': 0}
     ratio = re.match(r'keep([0-9.]+)', name)
     if ratio:
         cfg['keep_ratio'] = float(ratio.group(1))
@@ -99,6 +100,12 @@ def build_variant(name: str) -> dict:
     m = re.search(r'reselect(\d+)', name)
     if m:
         cfg['reselect_every'] = int(m.group(1))
+    if 'offloadv' in name.lower():
+        cfg['reselect_offload_v'] = True
+    bits = re.search(r'int(\d+)k', name.lower())
+    if bits:
+        cfg['reselect_k_bits'] = int(bits.group(1))
+        cfg['reselect_offload_v'] = True
     return cfg
 
 

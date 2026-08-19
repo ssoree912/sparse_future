@@ -72,6 +72,14 @@ is hundreds, so the candidates are the model's own partially written derivation.
 | keep 0.1 | **1.0** |
 | keep 0.1, block oracle | **1.0** |
 | keep 0.1, re-selection every 8 steps | **2.0** |
+| keep 0.25 | 3.0 |
+| keep 0.25, block oracle | 8.0 |
+| **keep 0.25, re-selection every 8 steps** | **12.0** |
+
+keep 0.25 is where selection finally decides the outcome: re-selection quadruples the
+baseline and beats the block oracle outright (12.0 vs 8.0), the same "adapting beats
+foreseeing" result SAMSum showed, only much larger. Above the cliff nothing helps because
+nothing is lost; far below it nothing helps because no subset is enough.
 
 The cliff sits between 0.5 and 0.3. At the shipped default nothing is lost — note the
 answers are almost entirely different text (2/100 identical to the uncompressed run) yet
@@ -85,6 +93,30 @@ sharpest evidence that what matters is *how much* is kept rather than *which* to
 
 `scripts/run_math500_sparse.py` runs the variants in one process (chat template, boxed
 answer extraction with sympy fallback, per-variant accuracy / latency / peak GPU memory).
+
+## Paying for re-selection without giving back the memory
+
+Re-selection needs the evicted entries to still exist, which is the whole memory saving.
+But only K has to stay on the GPU — it is what ranks candidates — and since K is never an
+attention operand for the entries that lose, it tolerates quantisation that V would not.
+Measured with `scripts/bench_cache_memory.py` (cache bytes actually held, SAMSum @2048):
+
+| variant | cache | SAMSum ROUGE-L | identical output to plain re-selection |
+|---|---|---|---|
+| no eviction (`keep=1.0`) | 1124 MB | 40.02 | — |
+| baseline keep 0.1 | 112 MB | 33.89 | — |
+| re-selection every 8 | 1236 MB | 35.85 | reference |
+| + V in host memory | 674 MB | 35.85 | **5/5 — exact** |
+| + int8 keys | 398 MB | **36.30** | 0/5 |
+| + int4 keys | **257 MB** | **36.48** | 1/5 |
+
+Offloading V is free by construction and halves the cost. Quantising the keys reorders the
+top-k enough to change every output, and the score does not care — int4 keys score *above*
+full-precision ones, comfortably inside noise. The end configuration keeps 2.3x the
+baseline's cache (still 4.4x below no eviction) and buys +2.6 ROUGE-L, with no training and
+nothing recomputed.
+
+At 4096 (passage retrieval) the same ladder reads 2148 / 214 / 2362 / 1288 / 760 / 491 MB.
 
 ## What is in here
 
