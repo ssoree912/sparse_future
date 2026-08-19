@@ -37,6 +37,26 @@ so per-step re-selection preserves the attention-compute saving but not the memo
 unless the full cache is rebuilt periodically by an extra full-sequence forward (the
 block already does two, at steps 0 and 1).
 
+## passage_retrieval_en (4096 ctx) — the same verdict on a retrieval task
+
+Summarisation tolerates a butchered cache, so the eviction question was re-run on
+needle-finding, where dropping the wrong paragraph should be fatal.
+
+| setting | 78 samples that fit 4096 | full 200 (truncated to 4096) |
+|---|---|---|
+| no eviction (`keep=1.0`) | 87.18 | — |
+| baseline keep 0.1 | **89.74** | **37.5** |
+| block oracle keep 0.1 | **89.74** | **38.0** |
+
+At keep 0.1 the retained budget is ~409 tokens and a Wikipedia paragraph is ~130, so
+attention-based selection keeps the needle comfortably: eviction costs nothing (it scores
+*above* no-eviction, within noise) and the oracle picks the same tokens — 78/78 identical
+predictions on the fitting subset, 179/200 on the full set for +0.5.
+
+The absolute drop on the full set is truncation, not eviction: those contexts are ~9.2k
+tokens median against LLaDA's 4096 limit, so the needle is often cut before decoding
+starts. Both methods face it equally.
+
 ## What is in here
 
 ### `sparse_dllm/` — instrumented model code
