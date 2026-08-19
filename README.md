@@ -16,15 +16,26 @@ Everything here is evaluated with OpenCompass on LongBench SAMSum, 2048-token co
 | student scorer, suffix always kept | 39.13 | 16.59 |
 | student scorer, suffix also evictable | — | 19.00 |
 | **block oracle** (perfect future attention, one choice per block) | — | **34.60** |
-| per-step oracle (re-select every step) | — | running |
-| no eviction, frozen cache (`keep=1.0`) | — | queued |
+| **per-step oracle** (re-select every step) | — | **36.70** |
+| **no eviction, frozen cache** (`keep=1.0`) | — | **40.02** |
 
-The block oracle is the headroom gate: it selects the kept 10% using the attention the
-block's queries *actually* pay over its remaining steps. At **34.60 vs the heuristic's
-33.89** it says that under one-choice-per-block eviction, no scorer — however well
-trained — buys more than ~0.7 ROUGE-L. That is what motivates the two runs still in
-flight: `keep=1.0` separates cache staleness from eviction capacity, and the per-step
-oracle separates *what* is kept from *how often* the choice is revisited.
+Those three oracles decompose the whole keep-0.1 gap. Freezing the cache without evicting
+anything scores **40.02**, above the uncompressed model, so cache staleness costs nothing
+and 40.02 — not 38.14 — is the ceiling eviction is measured against. From there:
+
+| slice | cost | recoverable by |
+|---|---|---|
+| capacity at 10% (40.02 → 36.70) | **3.32** | nothing at this budget — even perfect per-step selection pays it |
+| choosing once per block (36.70 → 34.60) | **2.10** | re-selecting more often |
+| imperfect scoring (34.60 → 33.89) | **0.71** | a better scorer |
+
+A better-trained scorer is aimed at the smallest of the three. Re-selection frequency is
+worth three times as much, which is why `oracle_reselect_every` exists.
+
+One caveat on that lever: bringing an evicted entry back requires its K/V to still exist,
+so per-step re-selection preserves the attention-compute saving but not the memory saving,
+unless the full cache is rebuilt periodically by an extra full-sequence forward (the
+block already does two, at steps 0 and 1).
 
 ## What is in here
 
@@ -115,13 +126,13 @@ its partial predictions.
 |---|---|
 | oracle harness (block and per-step) | implemented, validated at `keep=1.0`, block oracle measured |
 | block-wise teacher collector | written, statically checked, **not run yet** |
-| ratio-agnostic scorer training | **not written** — waiting on the oracle verdict |
+| ratio-agnostic scorer training | **not written** — the oracle verdict says it is worth ≤0.71 |
 | current student + teacher pipeline | included as-is, under diagnosis |
 
-The scorer redesign is deliberately blocked on the oracle numbers. If a perfect scorer
-only reaches ~34.6 at keep 0.1, retraining against a better teacher cannot reach the 38.14
-of the uncompressed model, and the useful intervention is structural (how often the kept
-set is re-chosen, whether stale entries are refreshed) rather than predictive.
+The scorer redesign was deliberately blocked on the oracle numbers, and they came back
+against it: a perfect one-shot-per-block scorer reaches 34.60, so retraining buys at most
+0.71 at this budget. The structural lever — how often the kept set is re-chosen — is worth
+2.10, and the remaining 3.32 is a hard capacity cost of keeping only 10%.
 
 When it is written, the scorer is to be trained as a **continuous, budget-independent
 ranker** — no `keep_ratio` baked into the objective, listwise targets in rank or log space
