@@ -75,9 +75,11 @@ is hundreds, so the candidates are the model's own partially written derivation.
 | keep 0.25 | 3.0 |
 | keep 0.25, block oracle | 8.0 |
 | **keep 0.25, re-selection every 8 steps** | **12.0** |
+| **keep 0.25, re-selection + host V + int4 keys** | **14.0** |
 
 keep 0.25 is where selection finally decides the outcome: re-selection quadruples the
-baseline and beats the block oracle outright (12.0 vs 8.0), the same "adapting beats
+baseline and beats the block oracle outright (12.0 vs 8.0, and 14.0 once the retained pool
+is compressed), the same "adapting beats
 foreseeing" result SAMSum showed, only much larger. Above the cliff nothing helps because
 nothing is lost; far below it nothing helps because no subset is enough.
 
