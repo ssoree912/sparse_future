@@ -76,6 +76,7 @@ is hundreds, so the candidates are the model's own partially written derivation.
 | keep 0.1, re-selection every 8 steps | **2.0** |
 | keep 0.25 | 3.0 |
 | keep 0.25, block oracle | 8.0 |
+| **keep 0.25, our scorer, no re-selection** | **8.0** |
 | **keep 0.25, re-selection every 8 steps** | **12.0** |
 | **keep 0.25, re-selection + host V + int4 keys** | **14.0** |
 | keep 0.25, oracle at the same 8-step cadence | 17.0 |
@@ -128,9 +129,19 @@ ceiling was wrong; it is simply a different, and worse, criterion.
 so the pool is retained — compressed and paged, but retained. Against the baseline that is
 2.3x the GPU cache plus host memory and PCIe traffic; against no eviction it is 4.4x
 smaller. It is better described as paged sparse attention with a resident index than as
-cache eviction, and on SAMSum it adds only +0.29 over the scorer change alone. Where it
-earns its keep is MATH at keep 0.25, and even there the split between criterion and
-retention is being measured rather than assumed.
+cache eviction, and on SAMSum it adds only +0.29 over the scorer change alone. Where it earns its keep is MATH at keep 0.25, and the split there is genuinely different:
+
+| SAMSum keep 0.1 | | MATH keep 0.25 | |
+|---|---|---|---|
+| baseline | 33.89 | baseline | 3.0 |
+| + our scorer (free) | 36.19 (**+2.30**) | + our scorer (free) | 8.0 (**+5.0**) |
+| + retention & re-selection | 36.48 (+0.29) | + retention & re-selection | 14.0 (**+6.0**) |
+
+Where the cache holds a static prompt, one good decision holds for the whole block and the
+criterion is the whole story. Where it holds the model's own reasoning, that decision goes
+stale as the reasoning is written, and retention carries more than half the gain. So the
+retention regime is not a free lunch to be claimed generally — it is the answer to a
+specific failure mode, and it should be reported with its memory cost attached.
 
 ## Paying for re-selection without giving back the memory
 
