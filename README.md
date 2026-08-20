@@ -78,6 +78,11 @@ is hundreds, so the candidates are the model's own partially written derivation.
 | keep 0.25, block oracle | 8.0 |
 | **keep 0.25, re-selection every 8 steps** | **12.0** |
 | **keep 0.25, re-selection + host V + int4 keys** | **14.0** |
+| keep 0.25, oracle at the same 8-step cadence | 17.0 |
+
+Scoring the same cadence perfectly is worth **+3.0** here (17.0 vs our 14.0) against
+**+1.4** on SAMSum — that gap, not the 0.71 a one-shot scorer could buy, is what a trained
+predictor of *future* utility would be aiming at.
 
 keep 0.25 is where selection finally decides the outcome: re-selection quadruples the
 baseline and beats the block oracle outright (12.0 vs 8.0, and 14.0 once the retained pool
