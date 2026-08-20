@@ -97,6 +97,11 @@ def build_variant(name: str) -> dict:
         cfg['keep_ratio'] = float(ratio.group(1))
     if 'oracle' in name:
         cfg['oracle_eviction'] = True
+    if 'perstep' in name.lower():
+        cfg['oracle_per_step'] = True
+    every = re.search(r'every(\d+)', name.lower())
+    if every:
+        cfg['oracle_reselect_every'] = int(every.group(1))
     m = re.search(r'reselect(\d+)', name)
     if m:
         cfg['reselect_every'] = int(m.group(1))

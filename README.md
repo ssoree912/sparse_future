@@ -124,7 +124,26 @@ At 4096 (passage retrieval) the same ladder reads 2148 / 214 / 2362 / 1288 / 760
 
 ### `sparse_dllm/` — instrumented model code
 
-Drop-in replacements for `opencompass/models/sparse_dllm/`. New model kwargs:
+Drop-in replacements for `opencompass/models/sparse_dllm/`.
+
+**The scorer is an explicit switch, and it defaults to upstream.** `CustomCache` carries
+both criteria side by side so a run can never silently mix them:
+
+| `scorer=` | how a candidate is ranked |
+|---|---|
+| `'sparse_dllm'` (default) | `sparse_dllm_importance()` — average the block's 32 queries into one vector, raw dot product against K, mean over heads, max-pool |
+| `'masked_row'` (ours) | `masked_row_importance()` — score each query row separately, softmax so every row is a distribution, mean over heads, **sum only the rows still holding [MASK]**, max-pool |
+
+The third difference is the load-bearing one. Mid-block, many of the 32 rows are already
+committed and no longer need anything from the cache; averaging the queries lets them
+dominate the ranking. Re-selecting with the upstream formula scores **33.65** on SAMSum —
+below not re-selecting at all — while the same cadence with `masked_row` scores **35.85**.
+
+`scorer` and `reselect_every` are independent, so the criterion and the cadence can be
+ablated separately (`configs/sparse_llada_ours_oneshot_keep01.py` is our scorer with no
+re-selection).
+
+New model kwargs:
 
 - `student_evict_suffix=True` — let the student scorer rank prompt **and** suffix columns
   in a single top-k with the baseline's budget (`int(n_candidates * keep_ratio)`), instead
@@ -137,6 +156,24 @@ Drop-in replacements for `opencompass/models/sparse_dllm/`. New model kwargs:
   step's own attention: run the step on the full cache, undo the commit, prune, re-run.
 - `oracle_pool=True/False` — whether the baseline's `max_pool1d(kernel_size=3)` smoothing
   is applied to the recorded importance before top-k.
+- `reselect_every=R` — keep the step-1 K/V and re-rank them with the configured scorer
+  every R steps. Nothing is recomputed; only the retained window moves.
+- `reselect_offload_v=True` — hold V in host memory and page in only the selected slice.
+  Exact: 5/5 identical outputs.
+- `reselect_k_bits=8|4` — quantise the retained keys. They only order candidates, so this
+  costs nothing measurable (int4 scores *above* full precision).
+
+### Running it elsewhere
+
+```bash
+cp sparse_dllm/*.py  <opencompass>/opencompass/models/sparse_dllm/
+cp configs/*.py      <opencompass>/myeval/models/     # datasets config goes in myeval/datasets/
+cd <opencompass> && python run.py --config-dir myeval \
+    --models sparse_llada_reselect8_int4k --datasets longbench_samsum_gen
+```
+
+If the environment also has a non-editable `opencompass` in `site-packages`, copy the four
+model files there as well — see the gotcha at the end, it costs a full silent run.
 
 Both oracle modes are validated by construction: at `keep_ratio=1.0` they reproduce the
 unmodified generation path token-for-token (`scripts/verify_oracle.py`,

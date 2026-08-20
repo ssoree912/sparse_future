@@ -132,6 +132,11 @@ class Sparse_dLLM_LLaDACausalLM(HuggingFaceBaseModel):
                  oracle_eviction: bool = False,
                  oracle_pool: bool = True,
                  oracle_per_step: bool = False,
+                 oracle_reselect_every: int = 1,
+                 reselect_every: int = 0,
+                 reselect_offload_v: bool = False,
+                 reselect_k_bits: int = 0,
+                 scorer: str = 'sparse_dllm',
 
                  **other_kwargs):
 
@@ -165,6 +170,11 @@ class Sparse_dLLM_LLaDACausalLM(HuggingFaceBaseModel):
         self.oracle_eviction = oracle_eviction
         self.oracle_pool = oracle_pool
         self.oracle_per_step = oracle_per_step
+        self.oracle_reselect_every = oracle_reselect_every
+        self.reselect_every = reselect_every
+        self.reselect_offload_v = reselect_offload_v
+        self.reselect_k_bits = reselect_k_bits
+        self.scorer = scorer
         self.cache_scorer = None
 
         if model_type == 'dream':
@@ -322,6 +332,11 @@ class Sparse_dLLM_LLaDACausalLM(HuggingFaceBaseModel):
                                oracle_eviction=self.oracle_eviction,
                                oracle_pool=self.oracle_pool,
                                oracle_per_step=self.oracle_per_step,
+                               oracle_reselect_every=self.oracle_reselect_every,
+                               reselect_every=self.reselect_every,
+                               reselect_offload_v=self.reselect_offload_v,
+                               reselect_k_bits=self.reselect_k_bits,
+                               scorer=self.scorer,
                                )
 
         outputs = outputs[:, tokens['input_ids'].shape[1]:]

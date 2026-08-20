@@ -48,7 +48,10 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=128, tempera
              cfg_scale=0., remasking='low_confidence', mask_id=126336,
              cache_scorer=None, student_question_window=128,
              student_score_head='attention', student_evict_suffix=False,
-             oracle_eviction=False, oracle_pool=True, oracle_per_step=False):
+             oracle_eviction=False, oracle_pool=True, oracle_per_step=False,
+             oracle_reselect_every=1, reselect_every=0,
+             reselect_offload_v=False, reselect_k_bits=0,
+             scorer='sparse_dllm'):
     '''
     Args:
         model: Mask predictor.
@@ -83,6 +86,10 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=128, tempera
                         question_window=student_question_window,
                         score_head=student_score_head,
                         evict_suffix=student_evict_suffix)
+        customcache.reselect_every = reselect_every
+        customcache.offload_v = reselect_offload_v
+        customcache.k_bits = reselect_k_bits
+        customcache.scorer = scorer
 
         block_start = prompt_len + num_block * block_length
         block_end = prompt_len + (num_block + 1) * block_length
@@ -145,19 +152,33 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=128, tempera
             run_step(1)
             customcache.snapshot_full()
             for i in range(2, steps):
-                customcache.restore_full()
-                customcache.set_row_mask(x[0, block_start:block_end] == mask_id)
-                x_before = x.clone()
+                if (i - 2) % oracle_reselect_every == 0:
+                    customcache.restore_full()
+                    customcache.set_row_mask(x[0, block_start:block_end] == mask_id)
+                    x_before = x.clone()
+                    run_step(i)
+                    x.copy_(x_before)
+                    customcache.set_row_mask(None)
+                    customcache.apply_oracle(
+                        model.config.keep_ratio,
+                        pool_kernel=model.config.kernel_size if oracle_pool else None,
+                    )
                 run_step(i)
-                x.copy_(x_before)
-                customcache.set_row_mask(None)
-                customcache.apply_oracle(
-                    model.config.keep_ratio,
-                    pool_kernel=model.config.kernel_size if oracle_pool else None,
-                )
+        elif reselect_every:
+            # Practical re-selection: one forward per step; at every R-th step the
+            # layer re-ranks the retained step-1 entries with its current queries.
+            for i in range(steps):
+                customcache.reselect_now = (i > 1 and (i - 2) % reselect_every == 0)
+                # Step 1 builds the cache and makes the opening selection, so it
+                # needs the row mask too.
+                if customcache.reselect_now or i == 1:
+                    customcache.set_row_mask(x[0, block_start:block_end] == mask_id)
                 run_step(i)
+            customcache.reselect_now = False
         elif not oracle_eviction:
             for i in range(steps):
+                if i == 1:
+                    customcache.set_row_mask(x[0, block_start:block_end] == mask_id)
                 run_step(i)
         else:
             # Pass 1: full cache, record what this block actually attends to.
