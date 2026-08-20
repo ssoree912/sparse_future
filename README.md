@@ -103,6 +103,35 @@ sharpest evidence that what matters is *how much* is kept rather than *which* to
 `scripts/run_math500_sparse.py` runs the variants in one process (chat template, boxed
 answer extraction with sympy fallback, per-variant accuracy / latency / peak GPU memory).
 
+## What here is actually eviction
+
+Worth stating plainly, because the two halves of this repo live in different memory
+regimes and only one of them is eviction in the sense the upstream method means.
+
+**The scorer change is eviction, and it is free.** Both criteria run at step 1, when the
+full-sequence forward has just produced K for every position — the baseline has that K in
+hand too, and both discard the losers immediately afterwards. Same 112 MB, same one-shot
+decision, nothing retained, no training:
+
+| SAMSum keep 0.1, one choice per block, 112 MB | score |
+|---|---|
+| upstream scorer | 33.89 |
+| block oracle (future attention, one choice) | 34.60 |
+| **`scorer='masked_row'`** | **36.19** |
+
+Note the ordering: our criterion beats the *oracle*. The oracle reads attention off a
+full-cache trajectory, and the deployed model walks a pruned one — it optimises for a
+future that will not happen. So the earlier framing of the block oracle as a headroom
+ceiling was wrong; it is simply a different, and worse, criterion.
+
+**Re-selection is not eviction.** Bringing a dropped entry back requires it to still exist,
+so the pool is retained — compressed and paged, but retained. Against the baseline that is
+2.3x the GPU cache plus host memory and PCIe traffic; against no eviction it is 4.4x
+smaller. It is better described as paged sparse attention with a resident index than as
+cache eviction, and on SAMSum it adds only +0.29 over the scorer change alone. Where it
+earns its keep is MATH at keep 0.25, and even there the split between criterion and
+retention is being measured rather than assumed.
+
 ## Paying for re-selection without giving back the memory
 
 Re-selection needs the evicted entries to still exist, which is the whole memory saving.
@@ -114,6 +143,7 @@ Measured with `scripts/bench_cache_memory.py` (cache bytes actually held, SAMSum
 |---|---|---|---|
 | no eviction (`keep=1.0`) | 1124 MB | 40.02 | — |
 | baseline keep 0.1 | 112 MB | 33.89 | — |
+| **our scorer, no re-selection** | **112 MB** | **36.19** | — |
 | re-selection every 8 | 1236 MB | 35.85 | reference |
 | + V in host memory | 674 MB | 35.85 | **5/5 — exact** |
 | + int8 keys | 398 MB | **36.30** | 0/5 |
