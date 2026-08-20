@@ -1,5 +1,7 @@
 # sparse_future
 
+방법을 수식과 함께 정리한 문서: [METHOD.ko.md](METHOD.ko.md) · 실행 안내: [README.ko.md](README.ko.md)
+
 한국어 실행 안내는 [README.ko.md](README.ko.md)에 있습니다 (설치, 실행 명령어, 주의사항).
 
 Cache-eviction experiments on top of [Sparse-dLLM](https://github.com/OpenMOSS/Sparse-dLLM)

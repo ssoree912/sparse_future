@@ -1,5 +1,7 @@
 # sparse_future — 실행 안내
 
+채점 기준과 재선택을 수식으로 정리한 문서는 [METHOD.ko.md](METHOD.ko.md)에 있습니다.
+
 LLaDA-8B-Instruct 위에서 [Sparse-dLLM](https://github.com/OpenMOSS/Sparse-dLLM)의 KV 캐시
 eviction을 다시 살펴본 실험 모음입니다. 핵심 질문은 하나입니다 — **캐시를 10%로 줄였을 때
 잃은 성능을, 토큰을 더 잘 고르는 것으로 얼마나 되찾을 수 있는가.**
