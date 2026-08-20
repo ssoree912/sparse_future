@@ -1,5 +1,7 @@
 # sparse_future
 
+한국어 실행 안내는 [README.ko.md](README.ko.md)에 있습니다 (설치, 실행 명령어, 주의사항).
+
 Cache-eviction experiments on top of [Sparse-dLLM](https://github.com/OpenMOSS/Sparse-dLLM)
 with LLaDA-8B-Instruct, aimed at answering one question: **when the KV cache is cut to 10%,
 how much of the lost quality can a better token-selection scorer recover?**
