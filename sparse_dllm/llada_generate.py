@@ -49,7 +49,9 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=128, tempera
              cache_scorer=None, student_question_window=128,
              student_score_head='attention', student_evict_suffix=False,
              oracle_eviction=False, oracle_pool=True, oracle_per_step=False,
-             oracle_reselect_every=1, reselect_every=0,
+             oracle_reselect_every=1, oracle_future_window=False,
+             oracle_commit_rows=False, oracle_rows='masked', oracle_aggregate='sum', oracle_row_aggregate='sum',
+             reselect_every=0,
              reselect_offload_v=False, reselect_k_bits=0,
              scorer='sparse_dllm'):
     '''
@@ -77,6 +79,19 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=128, tempera
     assert steps % num_blocks == 0
     steps = steps // num_blocks
 
+    def row_weights_for(mode, was_mask, committed, confidence, just_revealed=None):
+        if mode == 'answer':                       # AR과 동일: 확정된 토큰이 정확히 한 번 투표
+            return just_revealed.to(confidence.dtype), False
+        """Who votes at this step, and how much."""
+        if mode == 'commit':                       # 이번 스텝 확정되는 행, confidence 가중
+            return torch.where(committed, confidence, torch.zeros_like(confidence)), False
+        if mode == 'confirmed':                    # 이미 확정된 행 전부, 행 평균
+            return (~was_mask).to(confidence.dtype), True
+        if mode == 'union':                        # 확정되는 행(confidence) ∪ 확정된 행(1.0)
+            weights = torch.where(committed, confidence, torch.zeros_like(confidence))
+            return weights + (~was_mask).to(confidence.dtype), True
+        return was_mask.to(confidence.dtype), False   # 'masked': 아직 안 벗겨진 행
+
     for num_block in range(num_blocks):
         ## Initialize CustomCache for each block
         customcache = CustomCache(n_layers = model.config.n_layers, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), 
@@ -87,6 +102,8 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=128, tempera
                         score_head=student_score_head,
                         evict_suffix=student_evict_suffix)
         customcache.reselect_every = reselect_every
+        customcache.aggregate = oracle_aggregate
+        customcache.row_aggregate = oracle_row_aggregate
         customcache.offload_v = reselect_offload_v
         customcache.k_bits = reselect_k_bits
         customcache.scorer = scorer
@@ -134,6 +151,8 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=128, tempera
                     _, select_index = torch.topk(confidence[j], k=num_transfer_tokens[j, i])
                     transfer_index[j, select_index] = True
                 x[transfer_index] = x0[transfer_index]
+                return (transfer_index[0, block_start:block_end],
+                        x0_p[0, block_start:block_end].detach())
             else:
                 x0_block = torch.where(mask_index, x0, x[:, block_start:block_end])
                 confidence = torch.where(mask_index, x0_p, -np.inf)
@@ -142,6 +161,7 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=128, tempera
                     _, select_index = torch.topk(confidence[j], k=num_transfer_tokens[j, i])
                     transfer_index[j, select_index] = True
                 x[:, block_start:block_end][transfer_index] = x0_block[transfer_index]
+                return transfer_index[0], x0_p[0].detach()
 
         if oracle_per_step:
             # Re-select the kept 10% at every step from the attention that step
@@ -151,19 +171,40 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=128, tempera
             run_step(0)
             run_step(1)
             customcache.snapshot_full()
-            for i in range(2, steps):
-                if (i - 2) % oracle_reselect_every == 0:
-                    customcache.restore_full()
-                    customcache.set_row_mask(x[0, block_start:block_end] == mask_id)
-                    x_before = x.clone()
-                    run_step(i)
-                    x.copy_(x_before)
-                    customcache.set_row_mask(None)
-                    customcache.apply_oracle(
-                        model.config.keep_ratio,
-                        pool_kernel=model.config.kernel_size if oracle_pool else None,
-                    )
-                run_step(i)
+            i = 2
+            while i < steps:
+                window = min(oracle_reselect_every, steps - i)
+                # Pass 1: run the window against the full cache and record what it
+                # wants. With oracle_future_window the whole window is recorded, so
+                # the selection is made from attention that has not happened yet —
+                # each row votes only while it is still masked, i.e. right up to the
+                # step that reveals it. Without the flag only the first step of the
+                # window is recorded, which is present information measured under an
+                # unpruned cache rather than a look-ahead.
+                customcache.restore_full()
+                x_before = x.clone()
+                recorded = window if oracle_future_window else 1
+                customcache.capture_rows = True
+                customcache.set_row_mask(None)
+                just_revealed = (x[0, block_start:block_end] != mask_id)
+                for j in range(i, i + recorded):
+                    was_mask = (x[0, block_start:block_end] == mask_id)
+                    committed, confidence = run_step(j)
+                    weights, normalize = row_weights_for(
+                        oracle_rows, was_mask, committed, confidence, just_revealed)
+                    customcache.fold_rows(weights, normalize)
+                    just_revealed = committed
+                customcache.capture_rows = False
+                x.copy_(x_before)
+                customcache.set_row_mask(None)
+                customcache.apply_oracle(
+                    model.config.keep_ratio,
+                    pool_kernel=model.config.kernel_size if oracle_pool else None,
+                )
+                # Pass 2: replay the same window against the pruned cache.
+                for j in range(i, i + window):
+                    run_step(j)
+                i += window
         elif reselect_every:
             # Practical re-selection: one forward per step; at every R-th step the
             # layer re-ranks the retained step-1 entries with its current queries.
@@ -185,9 +226,37 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=128, tempera
             run_step(0)
             run_step(1)
             x_snapshot = x.clone()
+            if oracle_rows == 'final':
+                # 답변을 full 캐시로 끝까지 만들고, 완성된 블록 상태에서 forward를 한 번 더
+                # 돌려 그 답변이 실제로 참고한 것을 읽는다. 이때는 32행 전부가 실제 토큰이다.
+                customcache.oracle_mode = None
+                for i in range(2, steps):
+                    run_step(i)
+                customcache.oracle_mode = 'record'
+                customcache.capture_rows = True
+                customcache.set_row_mask(None)
+                _, confidence = run_step(steps - 1)
+                customcache.fold_rows(torch.ones_like(confidence), normalize=False)
+                customcache.capture_rows = False
+                x.copy_(x_snapshot)
+                customcache.apply_oracle(
+                    model.config.keep_ratio,
+                    pool_kernel=model.config.kernel_size if oracle_pool else None,
+                )
+                for i in range(2, steps):
+                    run_step(i)
+                continue
+            customcache.capture_rows = True
+            customcache.set_row_mask(None)
+            just_revealed = (x[0, block_start:block_end] != mask_id)
             for i in range(2, steps):
-                customcache.set_row_mask(x[0, block_start:block_end] == mask_id)
-                run_step(i)
+                was_mask = (x[0, block_start:block_end] == mask_id)
+                committed, confidence = run_step(i)
+                weights, normalize = row_weights_for(
+                    oracle_rows, was_mask, committed, confidence, just_revealed)
+                customcache.fold_rows(weights, normalize)
+                just_revealed = committed
+            customcache.capture_rows = False
             # Pass 2: replay the same steps against the oracle-pruned cache.
             x.copy_(x_snapshot)
             customcache.set_row_mask(None)

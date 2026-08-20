@@ -37,19 +37,6 @@ MATH-500 (100문제, 생성 256토큰, 정확도 — **math_verify 표준 채점
 > 동치 표현을 놓쳐 **일괄적으로 짜게** 나왔고, 특히 답변 기반 라벨이 +5~6씩 손해를 봤습니다.
 > MATH 수치는 반드시 `scripts/rescore_math.py`로 재채점해서 쓰세요.
 
-**집계 방식이 라벨 종류보다 중요합니다.** 미래 라벨이 계속 지던 것은 미래 정보가 나빠서가
-아니라 스텝/행 축을 `sum`으로 합쳤기 때문이었습니다. 소수의 행이나 한 스텝에서만 결정적으로
-필요했던 후보가 총합에 묻힙니다 (SAMSum keep 0.1):
-
-| 라벨 | `sum` | `max` | `freq` |
-|---|---|---|---|
-| 미래, 마스크 행 (스텝 축) | 34.60 | **36.20** | — |
-| 미래, 확정 토큰 (스텝 축) | 35.27 | **36.05** | 25.19 |
-| **미래, 완성된 답변 (행 축)** | 34.72 | **36.63** | — |
-
-`final × 행 max`가 전체 최고이자 **현재 기반(36.19)을 넘는 유일한 라벨**이고, forward 한 번이면
-얻어지므로 teacher 추출 비용도 가장 쌉니다. `freq`는 점수 크기를 버리고 순위만 세어서 붕괴합니다.
-
 라벨 정의 비교 (SAMSum keep 0.1, 200샘플 / MATH keep 0.25, 100샘플):
 
 | 선택 근거 | SAMSum | MATH | 배포 가능 |
@@ -205,56 +192,6 @@ python evaluation_script.py \
 `unrecognized arguments` 오류가 납니다 — 빼고 실행하세요. 그리고 그 스크립트들은
 `block_length=256`(블록 1개)이라 우리 방법의 전제와 다릅니다. **`block_length=32`로
 맞춰야** 지금까지의 실험과 비교됩니다.
-
-### teacher 추출 → student 학습 → 평가
-
-미래 기반 scorer를 만드는 전체 경로입니다. 라벨은 `final × 행 max` —
-**full 캐시로 블록을 끝까지 채운 뒤 완성된 상태에서 forward 한 번**을 돌리고,
-그 32개 답변 토큰이 각 후보에 준 어텐션의 **행 축 최댓값**을 씁니다.
-
-$$I_j \;=\; \max_{r=0..31}\ \bar a_{r,j}(\text{블록 완성 시점})$$
-
-```bash
-cd <dLLM_f>
-export CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2
-export HF_HOME=<hf_cache> TRANSFORMERS_OFFLINE=1
-
-# 1) teacher 추출 — samsum 300, 샘플당 약 6초
-python -m dllm_cache.budget.extract_final_rowmax_teacher --n-samples 300 \
-  --source-glob "<prompt shards>/samsum/*.pt" \
-  --output-root results/budget/teacher_final_rowmax_samsum300
-
-# 2) student 학습 — 6에폭, 약 40분
-python -m dllm_cache.budget.train_final_rowmax_student \
-  --teacher-root results/budget/teacher_final_rowmax_samsum300 \
-  --output-dir  results/budget/student_final_rowmax_samsum300
-
-# 3) 평가 — 학습된 scorer로 블록당 1회 선택 (보관 없음, baseline과 같은 메모리)
-cd <opencompass>
-python run.py --config-dir myeval --models sparse_llada_student_final_rowmax \
-  --datasets longbench_samsum_gen --work-dir outputs/samsum_student --max-workers-per-gpu 1
-```
-
-세 단계를 한 번에 돌리려면 `scripts/run_final_rowmax_pipeline.sh`를 tmux에서 실행하세요.
-각 단계에 이어받기와 재시도가 들어 있어 중간에 CUDA 오류가 나도 진행분을 잃지 않습니다.
-
-```bash
-tmux new-session -d -s pipe '<repo>/scripts/run_final_rowmax_pipeline.sh'
-tail -f <dLLM_f>/results/budget/pipeline.log
-```
-
-**추출이 저장하는 것** (블록당): 라벨 `[32 레이어, 후보수]` fp16, `x_at_block_start`,
-`candidate_indices`(프롬프트+suffix). 은닉 상태는 블록당 570 MB라 저장하지 않고,
-학습 때 `x_at_block_start`로 **배포와 같은 forward를 재현**해서 얻습니다 — 기존 student가
-프롬프트 전용 forward로 학습해 배포와 어긋났던 지점입니다. 300샘플 × 4블록 ≈ 165 MB.
-
-**학습**: 레이어별 헤드(`PromptUtilityStudent`, 레거시와 같은 형식이라 추론 경로가 그대로 읽음),
-손실은 정규화된 라벨에 대한 listwise KL + 전 구간 pairwise, 체크포인트는 단일 k가 아니라
-**k-grid(0.05~0.5) 평균 recall**로 선택합니다.
-
-**배포**: `student_cache_path`로 체크포인트를 주고 `student_evict_suffix=True`로 두면
-라벨과 같은 후보 집합(프롬프트+suffix)에서 블록당 1회 선택합니다. 보관도 재선택도 없어서
-**baseline과 동일한 메모리 조건**입니다.
 
 ### 메모리 측정
 

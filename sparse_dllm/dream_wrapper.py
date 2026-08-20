@@ -101,7 +101,7 @@ def _set_model_kwargs_torch_dtype(model_kwargs):
 
 
 @MODELS.register_module()
-class Sparse_dLLM_LLaDACausalLM(HuggingFaceBaseModel):
+class Sparse_dLLM_DreamCausalLM(HuggingFaceBaseModel):
 
     def __init__(self,
                  path: str,
@@ -123,25 +123,9 @@ class Sparse_dLLM_LLaDACausalLM(HuggingFaceBaseModel):
                  seed: int = None, 
 
                  ## add parameters
-                 kernel_size: Optional[int] = None,
+                 kernel_size: int = 3,
                  keep_ratio: float = 0.5,
-                 student_cache_path: Optional[str] = None,
-                 student_question_window: int = 128,
-                 student_score_head: str = 'attention',
-                 student_evict_suffix: bool = False,
-                 oracle_eviction: bool = False,
-                 oracle_pool: bool = True,
-                 oracle_per_step: bool = False,
-                 oracle_reselect_every: int = 1,
-                 oracle_future_window: bool = False,
-                 oracle_commit_rows: bool = False,
-                 oracle_rows: str = 'masked',
-                 oracle_aggregate: str = 'sum',
-                 oracle_row_aggregate: str = 'sum',
-                 reselect_every: int = 0,
-                 reselect_offload_v: bool = False,
-                 reselect_k_bits: int = 0,
-                 scorer: str = 'sparse_dllm',
+                 block_length: int = 32,
 
                  **other_kwargs):
 
@@ -164,31 +148,12 @@ class Sparse_dLLM_LLaDACausalLM(HuggingFaceBaseModel):
         self._load_tokenizer(tokenizer_path or path, tokenizer_kwargs, pad_token_id)
 
         self.scaling_config = scaling_config
-        self.block_len = diffusion_config["block_length"]
-        
+        self.block_len = block_length
         self.keep_ratio = keep_ratio
         self.kernel_size = kernel_size
-        self.student_cache_path = student_cache_path
-        self.student_question_window = student_question_window
-        self.student_score_head = student_score_head
-        self.student_evict_suffix = student_evict_suffix
-        self.oracle_eviction = oracle_eviction
-        self.oracle_pool = oracle_pool
-        self.oracle_per_step = oracle_per_step
-        self.oracle_reselect_every = oracle_reselect_every
-        self.oracle_future_window = oracle_future_window
-        self.oracle_commit_rows = oracle_commit_rows
-        self.oracle_rows = oracle_rows
-        self.oracle_aggregate = oracle_aggregate
-        self.oracle_row_aggregate = oracle_row_aggregate
-        self.reselect_every = reselect_every
-        self.reselect_offload_v = reselect_offload_v
-        self.reselect_k_bits = reselect_k_bits
-        self.scorer = scorer
-        self.cache_scorer = None
 
         if model_type == 'dream':
-            self.diffusion_config = {'steps': 32, 'alg': 'origin', 'output_history': True, 'return_dict_in_generate': True, }
+            self.diffusion_config = {'steps': 256, 'alg': 'entropy', 'return_dict_in_generate': True, 'temperature': 0.2, 'top_p': 0.95}
         else:
             self.diffusion_config = {'steps': 128, 'block_length': 32, 'temperature': 0., 'cfg_scale': 0., 'remasking': 'low_confidence', }
         if diffusion_config is not None:
@@ -200,8 +165,6 @@ class Sparse_dLLM_LLaDACausalLM(HuggingFaceBaseModel):
 
         if not tokenizer_only:
             self._load_model(path=path, kwargs=model_kwargs, peft_path=peft_path, peft_kwargs=peft_kwargs)
-            if self.student_cache_path is not None:
-                self._load_cache_scorer(self.student_cache_path)
         self.generation_kwargs = generation_kwargs
         self.stop_words = stop_words
 
@@ -222,6 +185,7 @@ class Sparse_dLLM_LLaDACausalLM(HuggingFaceBaseModel):
             model_kwargs['device_map'] = 'npu'
 
         config = AutoConfig.from_pretrained(path, trust_remote_code=True)
+        # config.flash_attention = True
         config.block_len = self.block_len
         config.kernel_size = self.kernel_size
         config.keep_ratio = self.keep_ratio
@@ -235,7 +199,8 @@ class Sparse_dLLM_LLaDACausalLM(HuggingFaceBaseModel):
             self.model = AutoModelForCausalLM.from_pretrained(path, config=config, device_map='auto', 
                                                         torch_dtype=torch.bfloat16, trust_remote_code=True)
         elif self.model_type == 'dream':
-            self.model = AutoModel.from_pretrained(path, config=config, device_map='auto', 
+            from .dream.modeling_dream import DreamModel
+            self.model = DreamModel.from_pretrained(path, config=config, device_map='auto', 
                                                    torch_dtype=torch.bfloat16, trust_remote_code=True)
         else:
             from .modeling_llada import LLaDAModelLM
@@ -249,25 +214,6 @@ class Sparse_dLLM_LLaDACausalLM(HuggingFaceBaseModel):
 
         self.model.eval()
         self.model.generation_config.do_sample = False
-
-    def _load_cache_scorer(self, checkpoint_path: str) -> None:
-        if self.model_type != 'llada':
-            raise RuntimeError('student cache scoring is only supported for LLaDA')
-        from .student_cache import load_prompt_utility_student
-
-        device = next(self.model.parameters()).device
-        self.cache_scorer = load_prompt_utility_student(checkpoint_path, device)
-        heads = tuple(self.cache_scorer.config.heads)
-        if self.student_score_head not in heads:
-            raise RuntimeError(
-                f'student score head {self.student_score_head!r} not found in {heads}'
-            )
-        print(
-            f'Student-guided Sparse-dLLM cache enabled: checkpoint={checkpoint_path}, '
-            f'head={self.student_score_head}, keep_ratio={self.keep_ratio}, '
-            f'question_window={self.student_question_window}',
-            flush=True,
-        )
 
 
     def generate(self,
@@ -286,16 +232,11 @@ class Sparse_dLLM_LLaDACausalLM(HuggingFaceBaseModel):
             add_special_tokens=True,
             max_length=self.max_seq_len
         )
-
         if self.drop_middle:
-            assert len(inputs) == 1
-            input_ids = self.tokenizer(inputs, padding=False, truncation=False)['input_ids']
-            input_ids = torch.tensor(input_ids)
-            if input_ids.shape[-1] > self.max_seq_len:
-                input_ids = torch.cat([input_ids[:, : self.max_seq_len // 2], input_ids[:, - self.max_seq_len // 2:]], dim=-1)
-            tokens = {'input_ids': input_ids, }
+            raise NotImplementedError("drop_middle mode is disabled")
         else:
-            tokens = self.tokenizer.batch_encode_plus(messages, **tokenize_kwargs)
+            m = [self.tokenizer.bos_token + p for p in messages]
+            tokens = self.tokenizer(m, **tokenize_kwargs)
 
         tokens = {k: v.to(self.model.device) for k, v in tokens.items()}
 
@@ -316,15 +257,15 @@ class Sparse_dLLM_LLaDACausalLM(HuggingFaceBaseModel):
         if self.model_type == 'llama':
             outputs = self.model.generate(**tokens, **generation_kwargs)
         elif self.model_type == 'dream':
-            diffusion_config = self.diffusion_config.copy()
+            diffusion_config = self.diffusion_config
             if diffusion_config['steps'] > max_out_len:
                 diffusion_config['steps'] = max_out_len
                 print(diffusion_config, flush=True)
             
-            outputs = self.model.diffusion_generate(tokens['input_ids'], 
-                                                    max_new_tokens=max_out_len, **diffusion_config).sequences
+            outputs = self.model.diffusion_generate(tokens['input_ids'], attention_mask = tokens['attention_mask'],
+                                                    max_new_tokens=max_out_len, **diffusion_config)
         else:
-            diffusion_config = self.diffusion_config.copy()
+            diffusion_config = self.diffusion_config
             if max_out_len % diffusion_config['block_length'] != 0:
                 max_out_len = int((max_out_len // diffusion_config['block_length'] + 1) * diffusion_config['block_length'])
             # print(max_out_len)
@@ -335,31 +276,20 @@ class Sparse_dLLM_LLaDACausalLM(HuggingFaceBaseModel):
 
             outputs = generate(self.model, tokens['input_ids'], 
                                gen_length=max_out_len, **diffusion_config,
-                               cache_scorer=self.cache_scorer,
-                               student_question_window=self.student_question_window,
-                               student_score_head=self.student_score_head,
-                               student_evict_suffix=self.student_evict_suffix,
-                               oracle_eviction=self.oracle_eviction,
-                               oracle_pool=self.oracle_pool,
-                               oracle_per_step=self.oracle_per_step,
-                               oracle_reselect_every=self.oracle_reselect_every,
-                               oracle_future_window=self.oracle_future_window,
-                               oracle_commit_rows=self.oracle_commit_rows,
-                               oracle_rows=self.oracle_rows,
-                               oracle_aggregate=self.oracle_aggregate,
-                               oracle_row_aggregate=self.oracle_row_aggregate,
-                               reselect_every=self.reselect_every,
-                               reselect_offload_v=self.reselect_offload_v,
-                               reselect_k_bits=self.reselect_k_bits,
-                               scorer=self.scorer,
                                )
 
-        outputs = outputs[:, tokens['input_ids'].shape[1]:]
+        generations = [
+            self.tokenizer.decode(g[len(p) :].tolist())
+            for p, g in zip(tokens['input_ids'], outputs.sequences)
+        ]
 
-        # step-3: decode the output
-        decodeds = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        for stop in stopping_criteria:
-            decodeds = [token.split(stop)[0] for token in decodeds]
+        decodeds = [
+            gen.split(self.tokenizer.eos_token)[0]
+            for gen in generations
+        ]
+        # print(decodeds)
+        # for stop in stopping_criteria:
+        #     decodeds = [token.split(stop)[0] for token in decodeds]
 
         return decodeds
 

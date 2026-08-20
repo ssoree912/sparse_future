@@ -588,6 +588,7 @@ class CustomCache:
         self.row_mask = None
         # Teacher collection: keep every target variant instead of just the one
         # the oracle prunes with.
+        self.layer_hidden_states = {}
         self.full_cache = {}
         self.reselect_every = 0
         self.reselect_now = False
@@ -603,6 +604,16 @@ class CustomCache:
         # which is what a re-selection schedule has to be designed against.
         self.store_per_step = False
         self.per_step = {}
+        # Commit-time labelling: hold each step's per-row attention until we know
+        # which rows that step actually revealed, then count only those.
+        self.capture_rows = False
+        self.pending_rows = {}
+        # 미래 라벨의 스텝 축 집계: 'sum'(총량) / 'max'(한 번이라도 강했나) /
+        # 'freq'(몇 스텝의 상위 k에 들었나)
+        self.aggregate = 'sum'
+        # 행 축 집계: 'sum'(전체가 얼마나 봤나) / 'max'(한 행이라도 강하게 봤나)
+        self.row_aggregate = 'sum'
+        self.step_topk = {}
 
     def set_row_mask(self, row_mask: Optional[torch.Tensor]) -> None:
         self.row_mask = row_mask
@@ -614,6 +625,9 @@ class CustomCache:
         weights = torch.softmax(scores, dim=-1)
         n_cand = k.size(-2) - q.size(-2)
         weights = weights[..., :n_cand].mean(dim=1).squeeze(0)
+        if self.capture_rows:
+            self.pending_rows[layer_id] = weights
+            return
         if self.store_per_step:
             rows = weights if self.row_mask is None else weights[self.row_mask]
             if rows.numel():
@@ -633,6 +647,47 @@ class CustomCache:
         accumulated = weights.sum(dim=0)
         previous = self.attn_accum.get(layer_id)
         self.attn_accum[layer_id] = accumulated if previous is None else previous + accumulated
+
+    def note_step_topk(self, layer_id: int, vector: torch.Tensor, keep_ratio: float) -> None:
+        """Count this step's top-k membership, for the 'freq' aggregation."""
+        k = max(1, int(vector.numel() * keep_ratio))
+        hit = torch.zeros_like(vector)
+        hit[torch.topk(vector, k).indices] = 1.0
+        previous = self.step_topk.get(layer_id)
+        self.step_topk[layer_id] = hit if previous is None else previous + hit
+
+    def fold_rows(self, row_weights: Optional[torch.Tensor], normalize: bool = False) -> None:
+        """Fold this step's per-row attention in under the given row weights.
+
+        The weights decide *whose* attention counts: the rows this step revealed,
+        the rows already revealed, or a mix. ``normalize`` divides by the weight
+        total, which matters for row sets that grow over the block — otherwise a
+        late step outvotes an early one simply by having more rows.
+        """
+        total = None if row_weights is None else row_weights.sum()
+        if row_weights is not None and total > 0:
+            for layer_id, weights in self.pending_rows.items():
+                weighted = row_weights.unsqueeze(-1) * weights
+                accumulated = (weighted.max(dim=0).values if self.row_aggregate == 'max'
+                               else weighted.sum(dim=0))
+                if normalize and self.row_aggregate != 'max':
+                    accumulated = accumulated / total
+                if self.aggregate == 'freq':
+                    self.note_step_topk(layer_id, accumulated, self.keep_ratios[layer_id])
+                    accumulated = self.step_topk[layer_id]
+                    self.attn_accum[layer_id] = accumulated
+                    continue
+                previous = self.attn_accum.get(layer_id)
+                if previous is None:
+                    self.attn_accum[layer_id] = accumulated
+                elif self.aggregate == 'max':
+                    self.attn_accum[layer_id] = torch.maximum(previous, accumulated)
+                else:
+                    self.attn_accum[layer_id] = previous + accumulated
+        self.pending_rows.clear()
+
+    def commit_rows(self, committed: Optional[torch.Tensor]) -> None:
+        self.fold_rows(None if committed is None else committed.float())
 
     def _accumulate(self, name: str, layer_id: int, value: torch.Tensor, reduce: str = 'sum') -> None:
         store = self.teacher_accum[name]
@@ -756,7 +811,6 @@ class CustomCache:
                 'k': cached_k[:, head_index, keep_indices],
                 'v': cached_v[:, head_index, keep_indices],
             }
-        self.layer_hidden_states = {}
 
     def capture_layer_hidden_states(
         self, layer_id: int, hidden_states: torch.Tensor
