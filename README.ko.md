@@ -23,14 +23,32 @@ SAMSum (LongBench, 2048 컨텍스트, 200샘플, ROUGE-L):
 | + V 오프로딩 | 35.85 | 674 MB |
 | **+ int4 K 양자화** | **36.48** | **257 MB** |
 
-MATH-500 (100문제, 생성 256토큰, 정확도):
+MATH-500 (100문제, 생성 256토큰, 정확도 — **math_verify 표준 채점**):
 
-| keep_ratio | baseline | 우리 기준 + 재선택 + int4 |
-|---|---|---|
-| 1.0 | 27.0 | — |
-| 0.5 | 27.0 | — |
-| 0.25 | 3.0 | 우리 기준만 **8.0** / 재선택까지 **14.0** (같은 주기 오라클 17.0) |
-| 0.1 | 1.0 | 2.0 |
+| keep_ratio | baseline | 우리 기준만 | 재선택+int4 |
+|---|---|---|---|
+| 1.0 | 32 | — | — |
+| 0.5 | 31 | — | — |
+| 0.3 | 8 | — | — |
+| **0.25** | **6** | **11** | **18** |
+| 0.1 | 2 | — | — |
+
+> 자체 채점기로는 각각 27 / 27 / 7 / 3·8·14 / 1이었습니다. `\frac{1}{2}` vs `0.5` 같은
+> 동치 표현을 놓쳐 **일괄적으로 짜게** 나왔고, 특히 답변 기반 라벨이 +5~6씩 손해를 봤습니다.
+> MATH 수치는 반드시 `scripts/rescore_math.py`로 재채점해서 쓰세요.
+
+라벨 정의 비교 (SAMSum keep 0.1, 200샘플 / MATH keep 0.25, 100샘플):
+
+| 선택 근거 | SAMSum | MATH | 배포 가능 |
+|---|---|---|---|
+| baseline (원본 기준) | 33.89 | 6 | ✅ |
+| `answer` (확정 직후 1회) | 34.24 | 9 | ❌ 오라클 |
+| `final` (완성된 답변 1회) | 34.72 | 8 | ❌ 오라클 |
+| `confirmed` (확정 행 매 스텝) | 35.27 | 7 | ❌ 오라클 |
+| **`ours` (마스크 행)** | **36.19** | **11** | **✅** |
+
+미래를 아는 오라클들이 현재만 보는 방법을 못 이깁니다. 예산은 여섯 모드 모두 레이어당
+정확히 `int(후보수 × keep_ratio)`개로 **실측 확인**했습니다 (`scripts/check_budget.py`).
 
 ## 무엇이 eviction이고 무엇이 아닌가
 
@@ -148,6 +166,33 @@ CUDA_VISIBLE_DEVICES=2 python scripts/run_math500_sparse.py \
 `-offloadv`, `-oracle`, `-oracle-perstep-every<주기>`. 결과는
 `results/math500/<변형>.json`에 정확도·소요시간·peak 메모리와 함께 저장됩니다.
 
+### lm-eval (공식 하네스)
+
+MATH·GSM8K는 OpenCompass가 아니라 **lm-evaluation-harness**가 표준입니다. `dLLM_f`의
+lm-eval 경로에 Sparse-dLLM eviction을 붙인 래퍼가 `eval_model/LLaDA_sparse.py`이고,
+모델 코드는 OpenCompass 의존성 없이 쓰도록 `dLLM_f/sparse_dllm/`에 독립 복사해 둡니다.
+
+```bash
+cd <dLLM_f>
+export CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2
+export HF_HOME=<hf_cache> HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+
+python evaluation_script.py \
+  --model LLaDA_sparse --tasks minerva_math --batch_size 1 --limit 200 \
+  --model_args "pretrained=<model>,keep_ratio=0.25,scorer=masked_row,block_len=32" \
+  --gen_kwargs "block_length=32,gen_length=256,steps=256,cfg_scale=0.0" \
+  --num_fewshot 0 --apply_chat_template --fewshot_as_multiturn
+```
+
+`scorer=sparse_dllm`이면 baseline입니다. `--model_args`로 `reselect_every`,
+`reselect_k_bits`, `oracle_*`도 전부 넘길 수 있고, 로딩 시 `[LLaDA_sparse] ...` 로그로
+실제 전달된 값이 찍힙니다.
+
+주의: dLLM_f의 기존 `.sh`는 `-m lm_eval` 인자를 붙이는데 lm_eval 0.4.12에서는
+`unrecognized arguments` 오류가 납니다 — 빼고 실행하세요. 그리고 그 스크립트들은
+`block_length=256`(블록 1개)이라 우리 방법의 전제와 다릅니다. **`block_length=32`로
+맞춰야** 지금까지의 실험과 비교됩니다.
+
 ### 메모리 측정
 
 ```bash
@@ -174,6 +219,11 @@ CUDA_VISIBLE_DEVICES=2 python scripts/bench_cache_memory.py --task passage_retri
 
 **GPU는 하나씩.** 모델이 bf16으로 약 16.7 GB를 쓰므로 24 GB 카드에서 두 실행을 동시에
 띄우면 OOM입니다. 순차로 돌리세요.
+
+**MATH 채점.** `scripts/run_math500_sparse.py`의 답 매칭은 직접 짠 것이라 동치 표현을
+놓칩니다. 결과 json이 예측 텍스트를 그대로 담고 있으므로 `scripts/rescore_math.py`로
+`math_verify` 재채점을 돌리세요 (GPU 불필요, 수 초). 방법론 간 비교는 반드시 재채점 후에
+하십시오 — 라벨에 따라 손해 폭이 달라 순서가 바뀝니다.
 
 **속도.** 재선택 자체는 스텝 하나의 3.5%(8스텝 주기면 평균 0.44%)라 실측 +4%입니다.
 V 오프로딩을 켜면 CPU→GPU 전송 때문에 +11%가 됩니다. pinned memory를 쓰면 더 줄일 수
