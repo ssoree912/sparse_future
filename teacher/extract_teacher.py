@@ -84,9 +84,13 @@ def collect(model, prompt_ids, args):
             keep = torch.topk(conf[0], k=ntt[0, i]).indices
             tgt[0, keep] = x0[0, keep]
 
+        # Step 1 runs forward, prunes, and only then reveals, so the state the
+        # scorer sees at selection time is the one *entering* step 1 - after
+        # step 0's reveal, before step 1's. Cloning after step(1) would hand
+        # training one revealed token more than deployment ever has.
         step(0)
-        step(1)
         x_at_block_start = x.clone()          # the scorer's input at selection time
+        step(1)
         for i in range(2, S):
             step(i)
 

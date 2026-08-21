@@ -118,6 +118,6 @@ eval/            the lm-eval model, registered as LLaDA_future
 
 ## Notes
 
-- The scorer sees `x_at_block_start` replayed at training time rather than stored hidden states, so its features match deployment exactly. An earlier version trained on a prompt-only forward and was deployed on a prompt+generation forward; that mismatch is what this replay removes.
+- The scorer sees `x_at_block_start` replayed at training time rather than stored hidden states, so its features match deployment exactly. Two things had to line up for that: the forward is the same shape (an earlier version trained on a prompt-only forward and was deployed on a prompt+generation forward), and the snapshot is taken *entering* step 1 rather than after it, because step 1 prunes before it reveals.
 - Prompt and suffix compete in one top-k, so the budget is exactly `candidates × keep_ratio` and matches the baseline's accounting.
 - `--use_cache <dir>` on lm-eval makes a run resumable, which matters on long jobs.
