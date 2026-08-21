@@ -11,6 +11,9 @@ so the cache knobs are reachable from ``--model_args``:
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import sys
 from pathlib import Path
 from typing import List
@@ -98,11 +101,36 @@ class LLaDAFuture(HFLM):
     def generate_until(self, requests: List[Instance], disable_tqdm: bool = False) -> List[str]:
         from tqdm import tqdm
 
+        # lm-eval's own --use_cache only writes once the whole batch returns, so a
+        # crash part-way through loses everything. This driver segfaults often
+        # enough that a 200-item run rarely finishes, so each answer is appended
+        # and fsynced as it is produced and a restart replays what is on disk.
+        store_path = os.environ.get("FUTURE_DLLM_RESUME", "")
+        done, store = {}, None
+        if store_path:
+            if os.path.exists(store_path):
+                with open(store_path) as fh:
+                    for line in fh:
+                        try:
+                            rec = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue          # a line the crash cut in half
+                        done[rec["key"]] = rec["text"]
+            os.makedirs(os.path.dirname(store_path) or ".", exist_ok=True)
+            store = open(store_path, "a")
+            print(f"[LLaDA_future] resume store: {len(done)} answers on disk", flush=True)
+
         results = []
         bar = tqdm(total=len(requests), disable=(disable_tqdm or self.rank != 0),
                    desc="future_dllm generate_until")
         for request in requests:
             context, raw_kwargs = request.args
+            key = hashlib.md5(
+                (context + repr(sorted(raw_kwargs.items()))).encode()).hexdigest()
+            if key in done:
+                results.append(done[key])
+                bar.update(1)
+                continue
             gen_kwargs = _generation_kwargs(raw_kwargs, self.max_gen_toks)
             gen_length = int(gen_kwargs["gen_length"])
             if gen_length % self._block_len:      # blocks have to divide the budget
@@ -131,6 +159,12 @@ class LLaDAFuture(HFLM):
                 if term:
                     text = text.split(term)[0]
             results.append(text)
+            if store is not None:
+                store.write(json.dumps({"key": key, "text": text}) + "\n")
+                store.flush()
+                os.fsync(store.fileno())
             bar.update(1)
         bar.close()
+        if store is not None:
+            store.close()
         return results

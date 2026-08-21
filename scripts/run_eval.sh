@@ -50,11 +50,10 @@ done
 ARGS="pretrained=$MODEL,block_len=32,keep_ratio=$KEEP"
 [ -n "$CKPT" ] && ARGS="$ARGS,student_path=$(cd "$(dirname "$CKPT")" && pwd)/$(basename "$CKPT")"
 
-# lm-eval writes each finished request straight to sqlite (autocommit), so a run
-# killed part-way resumes instead of starting over. Keyed on the exact model
-# args, so a different scorer never reads another one's answers.
-CACHE="$REPO/results/.cache/${DATASET}_keep${KEEP}_$(printf %s "$ARGS" | md5sum | cut -c1-8)"
-mkdir -p "$(dirname "$CACHE")"
+# Answers are appended as they are produced, so a segfault costs only the item in
+# flight. Keyed on the exact model args, so one scorer never reads another's.
+export FUTURE_DLLM_RESUME="$REPO/results/.resume/${DATASET}_keep${KEEP}_$(printf %s "$ARGS" | md5sum | cut -c1-8).jsonl"
+mkdir -p "$(dirname "$FUTURE_DLLM_RESUME")"
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
@@ -69,7 +68,6 @@ python eval/run.py \
   --tasks "$TASK" ${SHOTS} \
   --include_path "$TASKS_DIR" \
   --limit "${LIMIT:-200}" --batch_size 1 \
-  --use_cache "$CACHE" \
   --output_path "$TMP/out"
 
 # lm-eval buries its json under <path>/<model>/results_<iso>.json; one run is one
