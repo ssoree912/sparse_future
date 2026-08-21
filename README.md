@@ -23,11 +23,15 @@ The scorer is trained per layer to rank candidates by `I_j`, with a listwise KL 
 
 `LLaDA-8B-Instruct`, keep ratio 0.1, block length 32. Budget verified identical between rows — both keep 95/100/96 entries per block, so only the selection criterion differs.
 
-| | SAMSum ROUGE-L | GSM8K flex | GSM8K strict |
+| | SAMSum ROUGE-L¹ | GSM8K flex² | GSM8K strict² |
 |---|---|---|---|
 | no eviction (keep 1.0) | 40.02 | 0.765 | 0.480 |
 | Sparse-dLLM baseline | 33.89 | 0.455 | 0.140 |
 | **future_dllm** | **35.86** | **0.745** | **0.470** |
+
+¹ OpenCompass LongBench, measured before the harness was unified. ² lm-eval, 5-shot, 200 items.
+
+The SAMSum column predates the move to lm-eval and is kept for continuity with earlier runs. Under lm-eval the same scorer scores 31.01 on `longbench_samsum`; the two harnesses truncate long prompts from opposite ends (OpenCompass keeps the first 2048 tokens, lm-eval the last), so their SAMSum numbers are not comparable to each other. The baseline and ceiling rows have not been re-measured under lm-eval yet.
 
 GSM8K recovers 93% of what eviction costs the baseline; SAMSum recovers 32%. The split follows what the cache holds — a maths block's cache is the model's own reasoning chain, where losing one intermediate result destroys everything after it, while a summarisation block's cache is input text that no ranking can reconstruct from 10% of the tokens.
 

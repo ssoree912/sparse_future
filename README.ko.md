@@ -23,11 +23,15 @@ scorer는 레이어별로 `I_j` 순위를 맞추도록 학습한다. 정규화�
 
 `LLaDA-8B-Instruct`, keep ratio 0.1, block length 32. 두 행의 예산이 같은 것을 직접 계측했다 — 블록당 95/100/96개로 동일하고, 다른 것은 고르는 기준뿐이다.
 
-| | SAMSum ROUGE-L | GSM8K flex | GSM8K strict |
+| | SAMSum ROUGE-L¹ | GSM8K flex² | GSM8K strict² |
 |---|---|---|---|
 | 축출 없음 (keep 1.0) | 40.02 | 0.765 | 0.480 |
 | Sparse-dLLM 베이스라인 | 33.89 | 0.455 | 0.140 |
 | **future_dllm** | **35.86** | **0.745** | **0.470** |
+
+¹ OpenCompass LongBench, 하네스를 통일하기 전에 측정. ² lm-eval, 5-shot, 200문항.
+
+SAMSum 열은 lm-eval로 옮기기 전 수치이고, 이전 실행들과의 연속성을 위해 남겨둔다. 같은 scorer를 lm-eval `longbench_samsum`으로 재면 31.01이다. 두 하네스가 긴 프롬프트를 반대쪽에서 자르기 때문에(OpenCompass는 앞 2048토큰, lm-eval은 뒤 2048토큰) 두 SAMSum 수치는 서로 비교할 수 없다. 베이스라인과 상한 행은 아직 lm-eval로 재측정하지 않았다.
 
 GSM8K는 축출로 잃은 것의 93%를 되찾고, SAMSum은 32%다. 이 차이는 캐시에 무엇이 들어 있는지를 따라간다 — 수학 블록의 캐시는 모델 자신의 추론 사슬이라 중간 결과 하나를 잃으면 그 뒤가 전부 무너지지만, 요약 블록의 캐시는 입력 텍스트라 어떤 순위를 써도 10%로는 복원되지 않는다.
 
