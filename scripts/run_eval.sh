@@ -19,13 +19,18 @@ MODEL="${FUTURE_DLLM_MODEL:-$REPO/../model/LLaDA-8B-Instruct}"
 LONGBENCH_DATA="${LONGBENCH_DATA:-$REPO/../data/longbench/data}"
 
 case "$DATASET" in
+  # LongBench - task files in eval/tasks/longbench/, data from LONGBENCH_DATA
   samsum|trec|triviaqa|2wikimqa|hotpotqa|musique|qasper|narrativeqa|multifieldqa_en|\
   gov_report|qmsum|multi_news|lcc|repobench-p|passage_retrieval_en|passage_count)
-          TASK="longbench_$DATASET"; SHOTS="" ;;
-  gsm8k)  TASK=gsm8k;               SHOTS="--num_fewshot 5" ;;
-  mmlu)   TASK=mmlu_generative;     SHOTS="--num_fewshot 5" ;;
-  mbpp)   TASK=mbpp;                SHOTS="" ;;
-  math)   TASK=minerva_math;        SHOTS="" ;;
+              TASK="longbench_$DATASET";              SHOTS="" ;;
+  # lm-eval's own
+  mmlu)       TASK=mmlu_generative;                   SHOTS="--num_fewshot 5" ;;
+  arc_c)      TASK=arc_challenge;                     SHOTS="--num_fewshot 25" ;;
+  piqa)       TASK=piqa;                              SHOTS="" ;;
+  gpqa)       TASK=gpqa_main_generative_n_shot;       SHOTS="--num_fewshot 5" ;;
+  gsm8k)      TASK=gsm8k;                             SHOTS="--num_fewshot 5" ;;
+  math)       TASK=minerva_math;                      SHOTS="" ;;
+  humaneval)  TASK=humaneval;                         SHOTS="" ;;
   *) echo "unknown dataset: $DATASET" >&2; exit 1 ;;
 esac
 

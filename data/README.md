@@ -12,27 +12,26 @@ Provenance column:
 
 ## Evaluation
 
-| dataset | rows | source | provenance |
-|---|---|---|---|
-| MMLU | test 14,042 · validation 1,531 · dev 285 | [cais/mmlu](https://huggingface.co/datasets/cais/mmlu) | row-count |
-| ARC-Challenge | test 1,172 · validation 299 | [allenai/ai2_arc](https://huggingface.co/datasets/allenai/ai2_arc) `ARC-Challenge` | recorded |
-| PIQA | validation 1,838 | [ybisk/piqa](https://huggingface.co/datasets/ybisk/piqa) | recorded |
-| GPQA | main 448 | [Idavidrein/gpqa](https://huggingface.co/datasets/Idavidrein/gpqa) | card |
-| GSM8K | test 1,319 | [openai/gsm8k](https://huggingface.co/datasets/openai/gsm8k) `main` | recorded |
-| MATH | test 5,000 | [EleutherAI/hendrycks_math](https://huggingface.co/datasets/EleutherAI/hendrycks_math) | row-count |
-| MATH-500 | 500 | [HuggingFaceH4/MATH-500](https://huggingface.co/datasets/HuggingFaceH4/MATH-500) | card |
-| HumanEval | 164 | [openai/openai_humaneval](https://huggingface.co/datasets/openai/openai_humaneval) | recorded |
-| MBPP | test 500 | [google-research-datasets/mbpp](https://huggingface.co/datasets/google-research-datasets/mbpp) | row-count |
-| MMLU-Pro | test 12,032 | [TIGER-Lab/MMLU-Pro](https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro) | card |
-| BBH | 28 subtasks | [lukaemon/bbh](https://huggingface.co/datasets/lukaemon/bbh) | row-count |
-| LongBench | 34 tasks, 200 rows each (500 for lcc / repobench-p) | [zai-org/LongBench](https://huggingface.co/datasets/zai-org/LongBench) | recorded |
-| LongProc | — | [princeton-nlp/HELMET](https://github.com/princeton-nlp/HELMET) `longproc` | card |
+| dataset | rows | source | provenance | `run_eval.sh` |
+|---|---|---|---|---|
+| MMLU | test 14,042 · validation 1,531 · dev 285 | [cais/mmlu](https://huggingface.co/datasets/cais/mmlu) | row-count | `mmlu` |
+| ARC-Challenge | test 1,172 · validation 299 | [allenai/ai2_arc](https://huggingface.co/datasets/allenai/ai2_arc) `ARC-Challenge` | recorded | `arc_c` |
+| PIQA | validation 1,838 | [ybisk/piqa](https://huggingface.co/datasets/ybisk/piqa) | recorded | `piqa` |
+| GPQA | main 448 | [Idavidrein/gpqa](https://huggingface.co/datasets/Idavidrein/gpqa) | card | `gpqa` |
+| GSM8K | test 1,319 | [openai/gsm8k](https://huggingface.co/datasets/openai/gsm8k) `main` | recorded | `gsm8k` |
+| MATH | test 5,000 | [EleutherAI/hendrycks_math](https://huggingface.co/datasets/EleutherAI/hendrycks_math) | row-count | `math` |
+| MATH-500 | 500 | [HuggingFaceH4/MATH-500](https://huggingface.co/datasets/HuggingFaceH4/MATH-500) | card | — |
+| HumanEval | 164 | [openai/openai_humaneval](https://huggingface.co/datasets/openai/openai_humaneval) | recorded | `humaneval` |
+| LongBench | 34 tasks, 200 rows each (500 for lcc / repobench-p) | [zai-org/LongBench](https://huggingface.co/datasets/zai-org/LongBench) | recorded | task name |
 
 PIQA's test split is unlabelled, so validation is the evaluation set — lm-eval does the same.
 
 LongBench data is the official release: `input` plus a raw `context`, with the prompt in
 `config/dataset2prompt.json`. The eval task files in `eval/tasks/longbench/` are generated from
 that config. Repackaged copies that bake the prompt into `context` render the instruction twice.
+
+`../data/eval/` also holds MBPP, MMLU-Pro, BBH, LongProc and a clone of the Hendrycks MATH
+repository. Nothing here evaluates on them.
 
 ## Training
 
