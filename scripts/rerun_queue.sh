@@ -6,15 +6,27 @@ set -u
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 CK=artifacts/ckpts/1ds_300_e6_lr2e-4_6a5fc6/checkpoint-best
 
-progress () {   # answers already on disk for this row
+progress () {   # answers already on disk for this row: dataset, keep, method
   local n=0 f
-  for f in results/.resume/$1_keep$2*.jsonl; do
+  for f in results/.resume/*_$1_keep$2_$3_*.jsonl; do
     [ -f "$f" ] && n=$((n + $(wc -l < "$f")))
   done
   echo "$n"
 }
 
 run () {   # $1=dataset  $2=keep_ratio  $3=checkpoint | "baseline" | ""
+  local method model done_n
+  case "${3:-}" in
+    "")         method=none ;;
+    baseline)   method=baseline ;;
+    *)          method=$(basename "$(dirname "$3")") ;;
+  esac
+  model="${FUTURE_DLLM_MODEL_TAG:-$(basename "${FUTURE_DLLM_MODEL:-/workspace/dllm/model/LLaDA-8B-Instruct}")}"
+  done_n=$(ls results/"$model"/keep"$2"/"$1"/"$1"_keep"$2"_"$method"_*.json 2>/dev/null | wc -l)
+  if [ "$done_n" -gt 0 ]; then
+    echo -e "\n=== $1 keep$2 $method — 결과 있음, 건너뜀 ==="
+    return 0
+  fi
   echo -e "\n=== $1 keep$2 ${3:-none} $(date +%H:%M) ==="
   local before after log status
   # Restart only while the run is getting somewhere. Every answer is durable, so
@@ -22,7 +34,7 @@ run () {   # $1=dataset  $2=keep_ratio  $3=checkpoint | "baseline" | ""
   # something is actually wrong, and then we stop.
   while :; do
     while [ "$(nvidia-smi --id=2 --query-compute-apps=pid --format=csv,noheader|wc -l)" -ne 0 ]; do sleep 30; done
-    before=$(progress "$1" "$2")
+    before=$(progress "$1" "$2" "$method")
     log=$(mktemp)
     CUDA_VISIBLE_DEVICES=2 conda run --no-capture-output -n dllm \
         bash scripts/run_eval.sh "$1" "$2" $3 > "$log" 2>&1
@@ -30,7 +42,7 @@ run () {   # $1=dataset  $2=keep_ratio  $3=checkpoint | "baseline" | ""
     grep -vE "it/s\]|Left truncation|Loading|^ *$" "$log" | tail -5
     rm -f "$log"
     [ $status -eq 0 ] && { echo "  완료"; return 0; }
-    after=$(progress "$1" "$2")
+    after=$(progress "$1" "$2" "$method")
     echo "  세그폴트 (exit $status) — $before → $after 문항"
     if [ "$after" -le "$before" ]; then
       echo
@@ -41,9 +53,7 @@ run () {   # $1=dataset  $2=keep_ratio  $3=checkpoint | "baseline" | ""
   done
 }
 
-run samsum 1.0 ""          # independent re-measure: ours reads above the ceiling
-run samsum 0.1 baseline    # Sparse-dLLM criterion, same data and prompt
-run gsm8k  1.0 ""
-run gsm8k  0.1 baseline
-run gsm8k  0.1 "$CK"
+run gsm8k 0.1 baseline     # 200 answers already on disk, replays
+run gsm8k 0.1 "$CK"
+
 echo -e "\n=== 전체 완료 $(date +%H:%M) ==="
