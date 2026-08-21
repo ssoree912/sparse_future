@@ -43,7 +43,7 @@ TMP="$REPO/results/.run_${DATASET}_${STAMP}"
 # repo does not hard-code where the parquets live.
 TASKS_DIR="$TMP/tasks"
 mkdir -p "$TASKS_DIR"
-cp "$REPO"/eval/tasks/longbench/*.py "$TASKS_DIR/"
+cp "$REPO"/eval/tasks/metrics.py "$TASKS_DIR/"
 for y in "$REPO"/eval/tasks/longbench/*.yaml; do
   sed "s|LONGBENCH_DATA_DIR|$LONGBENCH_DATA|" "$y" > "$TASKS_DIR/$(basename "$y")"
 done

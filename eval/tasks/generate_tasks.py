@@ -1,8 +1,9 @@
 """공식 dataset2prompt / dataset2maxlen 에서 lm-eval task 파일을 생성한다."""
 import json, pathlib, re
 
-CFG = pathlib.Path('/workspace/dllm/data/longbench/config')
-OUT = pathlib.Path('/workspace/dllm/sparse_future/eval/tasks/longbench')
+HERE = pathlib.Path(__file__).resolve().parent
+CFG = HERE.parent.parent.parent / 'data' / 'longbench' / 'config'
+OUT = HERE / 'longbench'
 prompts = json.load(open(CFG / 'dataset2prompt.json'))
 maxlen  = json.load(open(CFG / 'dataset2maxlen.json'))
 
@@ -26,7 +27,7 @@ TAG = {'samsum': 'fewshot', 'trec': 'fewshot', 'triviaqa': 'fewshot',
        'multi_news': 'summarization', 'lcc': 'code', 'repobench-p': 'code',
        'passage_retrieval_en': 'synthetic', 'passage_count': 'synthetic'}
 
-metrics_src = (OUT / 'metrics.py').read_text()
+metrics_src = (HERE / 'metrics.py').read_text()
 for old in OUT.glob('*.yaml'):
     old.unlink()
 
