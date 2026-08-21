@@ -57,7 +57,6 @@ class LLaDAFuture(HFLM):
         block_len: int = 32,
         max_prompt_len: int = 2048,
         student_path: str = "",
-        scorer: str = "future",
         question_window: int = 128,
         dtype: str = "bfloat16",
         **kwargs,
@@ -68,7 +67,6 @@ class LLaDAFuture(HFLM):
         self._generate = generate
         self._question_window = int(question_window)
         self._block_len = int(block_len)
-        self._scorer_kind = str(scorer)
         self._max_prompt_len = int(max_prompt_len)
 
         config = AutoConfig.from_pretrained(str(pretrained), trust_remote_code=True)
@@ -99,13 +97,23 @@ class LLaDAFuture(HFLM):
         self._scorer = None
         if student_path:
             self._scorer = load_prompt_utility_student(student_path, device)
-        elif float(keep_ratio) < 1.0 and self._scorer_kind != "baseline":
+        elif float(keep_ratio) < 1.0:
             raise ValueError(
                 "eviction needs a trained scorer: pass student_path=<checkpoint>, "
-                "scorer=baseline for the Sparse-dLLM criterion, or keep_ratio=1.0")
+                "or keep_ratio=1.0 to run without eviction")
         print(f"[LLaDA_future] keep_ratio={keep_ratio} block_len={block_len} "
               f"max_prompt_len={max_prompt_len} "
-              f"scorer={student_path or scorer}", flush=True)
+              f"scorer={student_path or 'none (no eviction)'}", flush=True)
+
+    def _call_generate(self, context_enc, gen_kwargs, gen_length):
+        return self._generate(
+            self.model, context_enc.to(self.device),
+            steps=int(gen_kwargs["steps"]), gen_length=gen_length,
+            block_length=self._block_len,
+            temperature=float(gen_kwargs.get("temperature", 0.0)),
+            cfg_scale=float(gen_kwargs.get("cfg_scale", 0.0)),
+            remasking=gen_kwargs.get("remasking") or "low_confidence",
+            cache_scorer=self._scorer, question_window=self._question_window)
 
     @torch.no_grad()
     def generate_until(self, requests: List[Instance], disable_tqdm: bool = False) -> List[str]:
@@ -152,18 +160,7 @@ class LLaDAFuture(HFLM):
                 [context], truncation=self.truncation,
                 left_truncate_len=self._max_prompt_len)
 
-            out = self._generate(
-                self.model, context_enc.to(self.device),
-                steps=int(gen_kwargs["steps"]),
-                gen_length=gen_length,
-                block_length=self._block_len,
-                temperature=float(gen_kwargs.get("temperature", 0.0)),
-                cfg_scale=float(gen_kwargs.get("cfg_scale", 0.0)),
-                remasking=gen_kwargs.get("remasking") or "low_confidence",
-                cache_scorer=self._scorer,
-                question_window=self._question_window,
-                scorer=self._scorer_kind,
-            )
+            out = self._call_generate(context_enc, gen_kwargs, gen_length)
             text = self.tokenizer.decode(out[0, context_enc.shape[1]:],
                                          skip_special_tokens=True)
             for term in gen_kwargs.get("until") or []:

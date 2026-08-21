@@ -38,13 +38,12 @@ def get_num_transfer_tokens(mask_index, steps):
 @torch.no_grad()
 def generate(model, prompt, steps=128, gen_length=128, block_length=32,
              temperature=0., cfg_scale=0., remasking='low_confidence',
-             mask_id=MASK_ID, cache_scorer=None, question_window=128,
-             scorer="future"):
+             mask_id=MASK_ID, cache_scorer=None, question_window=128):
     """Generate ``gen_length`` tokens block by block.
 
     ``cache_scorer`` is a trained ``PromptUtilityStudent``; without one the model
-    only runs at ``keep_ratio=1.0`` (no eviction), or with ``scorer="baseline"``
-    for Sparse-dLLM's criterion. ``keep_ratio`` comes from ``model.config``.
+    only runs at ``keep_ratio=1.0`` (no eviction). ``keep_ratio`` comes from
+    ``model.config``. The Sparse-dLLM baseline lives in eval/baseline/.
     """
     prompt_len = prompt.shape[1]
     x = torch.full((1, prompt_len + gen_length), mask_id, dtype=torch.long,
@@ -61,7 +60,7 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=32,
         # made once against the block that will use it.
         cache = CustomCache(
             n_layers=model.config.n_layers, device=model.device,
-            keep_ratio=model.config.keep_ratio, scorer=scorer,
+            keep_ratio=model.config.keep_ratio,
             cache_scorer=cache_scorer, prompt_length=prompt_len,
             generation_length=gen_length, question_window=question_window)
 

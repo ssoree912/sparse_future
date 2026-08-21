@@ -48,9 +48,10 @@ for y in "$REPO"/eval/tasks/longbench/*.yaml; do
   sed "s|LONGBENCH_DATA_DIR|$LONGBENCH_DATA|" "$y" > "$TASKS_DIR/$(basename "$y")"
 done
 
+MODEL_NAME=LLaDA_future
 ARGS="pretrained=$MODEL,block_len=32,keep_ratio=$KEEP"
 if [ "$CKPT" = "baseline" ]; then
-  ARGS="$ARGS,scorer=baseline"          # Sparse-dLLM's criterion, for comparison
+  MODEL_NAME=LLaDA_sparse               # the authors' code, vendored unmodified
 elif [ -n "$CKPT" ]; then
   ARGS="$ARGS,student_path=$(cd "$(dirname "$CKPT")" && pwd)/$(basename "$CKPT")"
 fi
@@ -68,7 +69,7 @@ export HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=false
 echo "$DATASET keep=$KEEP -> $RESULT"
 cd "$REPO"
 python eval/run.py \
-  --model LLaDA_future \
+  --model "$MODEL_NAME" \
   --model_args "$ARGS" \
   --tasks "$TASK" ${SHOTS} \
   --include_path "$TASKS_DIR" \

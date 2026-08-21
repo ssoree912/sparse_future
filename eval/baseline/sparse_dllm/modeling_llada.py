@@ -523,142 +523,64 @@ def alibi_attention_bias(seq_len: int, config: ModelConfig, device: torch.device
     # shape: (1, n_heads, seq_len, seq_len)
     return alibi_bias * (1.0 / (2 ** m.view(1, config.n_heads, 1, 1)))  # type: ignore
 
-## Future-attention cache eviction
-
+## Dynamic Cache Eviction
 class CustomCache:
-    """Block-wise KV cache with future-attention eviction.
-
-    One instance per block. Step 0-1 run the full sequence and build the cache;
-    ``filter_cache`` then prunes it to ``keep_ratio`` using the student scorer,
-    and steps 2.. run against the pruned cache plus the block itself.
-
-    Two modes:
-      * deployment - ``cache_scorer`` is a trained student, one selection per
-        block, prompt and suffix compete in a single top-k.
-      * teacher collection - ``collect_pool`` keeps every candidate in candidate
-        order so recorded attention columns line up with the cache entries, and
-        ``capture_rows`` hands the per-row attention to the extractor.
-    """
-
-    def __init__(
-        self,
-        n_layers: int,
-        device: torch.device,
-        keep_ratio: float = 1.0,
-        cache_scorer=None,
-        prompt_length: int = 0,
-        generation_length: int = 0,
-        question_window: int = 128,
-    ) -> None:
+    def __init__(self, n_layers: int, device: torch.device, kernel_size: Optional[int] = None, keep_ratio: float = 0.7):
         self.cache = {}
-        self.keep_ratios = [keep_ratio for _ in range(n_layers)]
-        self.cache_scorer = cache_scorer
-        self.prompt_length = prompt_length
-        self.generation_length = generation_length
-        self.question_window = question_window
-
-        # Hidden states the student scores from; the block writes them per layer
-        # on the step-1 forward and filter_cache consumes them.
-        self.layer_hidden_states = {}
-
-        # Teacher collection.
-        self.collect_pool = False
-        self.capture_rows = False
-        self.pending_rows = {}
-        self.row_mask = None
-
-    def set_row_mask(self, row_mask: Optional[torch.Tensor]) -> None:
-        self.row_mask = row_mask
-
-    def record_attention(self, layer_id: int, q: torch.Tensor, k: torch.Tensor) -> None:
-        """Per-row attention over the candidate columns, head-averaged.
-
-        Only used while collecting teacher labels. ``k`` holds the candidates
-        followed by the block's own keys; the block columns are dropped so the
-        rows score the cache alone.
-        """
-        if not self.capture_rows:
-            return
-        if q.size(1) != k.size(1):
-            k = k.repeat_interleave(q.size(1) // k.size(1), dim=1)
-        scores = torch.matmul(q.float(), k.float().transpose(-2, -1)) / (q.size(-1) ** 0.5)
-        weights = torch.softmax(scores, dim=-1)
-        n_cand = k.size(-2) - q.size(-2)
-        self.pending_rows[layer_id] = weights[..., :n_cand].mean(dim=1).squeeze(0)
-
-    def capture_layer_hidden_states(self, layer_id: int, hidden_states: torch.Tensor) -> None:
-        if self.cache_scorer is not None:
-            self.layer_hidden_states[layer_id] = hidden_states
-
+        self.keep_ratios = [keep_ratio for i in range(n_layers)]
+        self.pool_kernel_size = kernel_size
+        
     def get_cache(self, layer_id: int):
         return self.cache.get(layer_id, {"k": None, "v": None})
-
+        
     def update_cache(self, layer_id: int, k: torch.Tensor, v: torch.Tensor):
-        self.cache[layer_id] = {"k": k.clone(), "v": v.clone()}
-
-    def filter_cache(self, layer_id: int, q_block: torch.Tensor,
-                     cur_filtered_len: int, block_len: int):
-        """Drop the block's own columns, then keep the top ``keep_ratio`` share."""
+        self.cache[layer_id] = {
+            "k": k.clone(),
+            "v": v.clone()
+        }
+    
+    def filter_cache(self, layer_id: int, q_block: torch.Tensor, cur_filtered_len: int, block_len: int):
         cached = self.get_cache(layer_id)
-        cached_k, cached_v = cached["k"], cached["v"]
+        cached_k = cached["k"]
+        cached_v = cached["v"]
 
-        # The block's own keys never belong in its cache - it attends to them
-        # directly - so they come out before anything is scored.
-        keep_k = torch.cat([cached_k[:, :, :cur_filtered_len, :],
-                            cached_k[:, :, cur_filtered_len + block_len:, :]], dim=2)
-        keep_v = torch.cat([cached_v[:, :, :cur_filtered_len, :],
-                            cached_v[:, :, cur_filtered_len + block_len:, :]], dim=2)
-
-        if self.collect_pool or self.keep_ratios[layer_id] >= 1.0:
-            # Nothing is evicted: keep the pool in candidate order so recorded
-            # attention columns line up with the entries they belong to.
-            self.cache[layer_id] = {"k": keep_k, "v": keep_v}
-            return
-
-        if self.cache_scorer is None:
-            raise RuntimeError(
-                "future_dllm evicts with a trained scorer; pass a student "
-                "checkpoint, or run with keep_ratio=1.0 to disable eviction"
+        # q_block: [B, n_heads, block_len, head_dim]
+        # cached_k: [B, n_kv_heads, seq_len, head_dim]
+        filtered_cached_k = torch.cat([cached_k[:, :, :cur_filtered_len, :], cached_k[:, :, cur_filtered_len + block_len:, :]], dim = 2)
+        filtered_cached_v = torch.cat([cached_v[:, :, :cur_filtered_len, :], cached_v[:, :, cur_filtered_len + block_len:, :]], dim = 2)
+        if q_block.size(1) != filtered_cached_k.size(1):
+            filtered_cached_k_attn = filtered_cached_k.repeat_interleave(
+                q_block.size(1) // filtered_cached_k.size(1), dim=1
             )
+        else:
+            filtered_cached_k_attn = filtered_cached_k
 
-        hidden_states = self.layer_hidden_states.pop(layer_id, None)
-        if hidden_states is None:
-            raise RuntimeError(f"missing hidden states for scorer layer {layer_id}")
-        if hidden_states.shape[0] != 1:
-            raise RuntimeError("scorer selection requires batch_size=1")
-        sequence_length = int(hidden_states.shape[1])
+        avg_q = q_block.mean(dim=-2)
+        scores = torch.matmul(avg_q.unsqueeze(-2), filtered_cached_k_attn.transpose(-2, -1)).squeeze(-2)
+        importance = scores.mean(dim=1)
 
-        # Candidates are everything outside the block: prompt and the suffix
-        # blocks that follow. Both compete in one top-k, so the budget is
-        # exactly candidates * keep_ratio.
-        candidate_indices = torch.cat([
-            torch.arange(cur_filtered_len, device=hidden_states.device),
-            torch.arange(cur_filtered_len + block_len, sequence_length,
-                         device=hidden_states.device),
-        ])
-        if candidate_indices.numel() != keep_k.size(-2):
-            raise RuntimeError("scorer candidates do not match cached K/V")
-
-        question_end = min(self.prompt_length, sequence_length)
-        if question_end <= 0:
-            raise RuntimeError("scorer requires a non-empty prompt")
-        question_indices = torch.arange(
-            max(0, question_end - self.question_window), question_end,
-            device=hidden_states.device)
-
-        scores = self.cache_scorer.forward_layer(
-            layer_id, hidden_states.float(), candidate_indices, question_indices,
-            head="score").float()
-        keep_num = int(candidate_indices.numel() * self.keep_ratios[layer_id])
-        keep_indices = torch.topk(scores, k=keep_num, dim=-1).indices.squeeze(0).sort().values
-
-        head_index = torch.arange(keep_k.size(1), device=keep_k.device)[:, None]
-        self.cache[layer_id] = {"k": keep_k[:, head_index, keep_indices],
-                                "v": keep_v[:, head_index, keep_indices]}
-
+        if self.pool_kernel_size is not None:
+            importance = F.max_pool1d(
+                importance.unsqueeze(1),
+                kernel_size=self.pool_kernel_size,
+                stride=1,
+                padding=self.pool_kernel_size // 2
+            ).squeeze(1)
+        
+        keep_num = int(importance.size(-1) * self.keep_ratios[layer_id])
+        _, keep_indices = torch.topk(importance, k=keep_num, dim=-1)
+        keep_indices = keep_indices.squeeze(0)
+        
+        n_kv_heads = filtered_cached_k.size(1)
+        filtered_cached_k = filtered_cached_k[:, torch.arange(n_kv_heads, device = filtered_cached_k.device)[:, None], keep_indices]
+        filtered_cached_v = filtered_cached_v[:, torch.arange(n_kv_heads, device = filtered_cached_k.device)[:, None], keep_indices]
+        self.cache[layer_id] = {
+            "k": filtered_cached_k,
+            "v": filtered_cached_v
+        }
+        
     def clear(self):
         self.cache.clear()
-
 
 
 class LLaDABlock(nn.Module):
@@ -854,8 +776,7 @@ class LLaDABlock(nn.Module):
         elif cache_state == 2:
             cached = customcache.get_cache(self.layer_id)
             k = torch.cat([cached["k"], k], dim = -2)
-            v = torch.cat([cached["v"], v], dim = -2)
-            customcache.record_attention(self.layer_id, q, k)
+            v = torch.cat([cached["v"], v], dim = -2) 
         # print(q.shape, k.shape, v.shape)
 
         if attention_bias is not None:
@@ -953,8 +874,6 @@ class LLaDASequentialBlock(LLaDABlock):
         layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
-        if cache_state == 1:
-            customcache.capture_layer_hidden_states(self.layer_id, x)
         # Get query, key, value projections.
         # shape:
         #  - for regular attn q, k, v: (batch_size, seq_len, d_model)
@@ -1067,8 +986,6 @@ class LLaDALlamaBlock(LLaDABlock):
         layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
-        if cache_state == 1:
-            customcache.capture_layer_hidden_states(self.layer_id, x)
         # Get query, key, value projections.
         # shape:
         #  - for regular attn q, k, v: (batch_size, seq_len, d_model)
