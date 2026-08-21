@@ -25,7 +25,9 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", default="/workspace/dllm/model/LLaDA-8B-Instruct")
     p.add_argument("--teacher-root", default="/workspace/dllm/dLLM_f/results/budget/"
-                                             "teacher_final_rowmax_samsum300")
+                                             "teacher_final_rowmax_samsum300",
+                   help="쉼표로 여러 개를 주면 도메인 혼합 학습. val은 도메인별로 나누고, "
+                        "체크포인트는 도메인 macro 평균으로 고른다.")
     p.add_argument("--output-dir", default="/workspace/dllm/dLLM_f/results/budget/"
                                            "student_final_rowmax_samsum300")
     p.add_argument("--opencompass-root", default="/workspace/dllm/opencompass")
@@ -70,12 +72,21 @@ def main():
     CustomCache.capture_layer_hidden_states = (
         lambda self, layer_id, hidden: self.layer_hidden_states.__setitem__(layer_id, hidden))
 
-    shards = sorted(glob.glob(f"{args.teacher_root}/*.pt"))
-    if not shards:
-        raise SystemExit(f"no teacher shards under {args.teacher_root}")
-    split = max(1, int(len(shards) * args.val_ratio))
-    val_shards, train_shards = shards[:split], shards[split:]
-    print(f"train {len(train_shards)} / val {len(val_shards)} shards", flush=True)
+    # 도메인별로 val을 따로 떼야, 블록 수가 많은 도메인이 체크포인트 선택을 독점하지 않는다.
+    roots = [r for r in args.teacher_root.split(",") if r]
+    train_shards, val_shards, datasets = [], [], []
+    for root in roots:
+        name = Path(root).name.replace("teacher_final_rowmax_", "")
+        found = sorted(glob.glob(f"{root}/*.pt"))
+        if not found:
+            raise SystemExit(f"no teacher shards under {root}")
+        split = max(1, int(len(found) * args.val_ratio))
+        val_shards += [(name, p) for p in found[:split]]
+        train_shards += [(name, p) for p in found[split:]]
+        datasets.append(name)
+        print(f"  {name}: train {len(found)-split} / val {split} shards", flush=True)
+    print(f"train {len(train_shards)} / val {len(val_shards)} shards "
+          f"over {len(datasets)} domain(s)", flush=True)
 
     # 배포 경로(`student_cache_path`)가 그대로 읽을 수 있도록 기존 student 클래스를 쓴다.
     from opencompass.models.sparse_dllm.student_cache import PromptUtilityStudent, StudentConfig
@@ -127,20 +138,24 @@ def main():
     for epoch in range(args.epochs):
         student.train(); random.shuffle(train_shards)
         started, losses = time.time(), []
-        for n, path in enumerate(train_shards):
+        for n, (_, path) in enumerate(train_shards):
             for record in torch.load(path, map_location="cpu", weights_only=False)["blocks"]:
                 losses.append(step(record, True)[0])
             if (n + 1) % 30 == 0:
                 print(f"  epoch {epoch} {n+1}/{len(train_shards)} "
                       f"loss {sum(losses[-120:])/max(1,len(losses[-120:])):.4f}", flush=True)
         student.eval()
+        per_ds = {}
         with torch.no_grad():
-            vals = [step(r, False)[1]
-                    for p in val_shards
-                    for r in torch.load(p, map_location="cpu", weights_only=False)["blocks"]]
-        score = sum(vals) / max(1, len(vals))
+            for name, p in val_shards:
+                for r in torch.load(p, map_location="cpu", weights_only=False)["blocks"]:
+                    per_ds.setdefault(name, []).append(step(r, False)[1])
+        means = {k: sum(v) / max(1, len(v)) for k, v in per_ds.items()}
+        score = sum(means.values()) / max(1, len(means))   # 도메인 macro 평균
+        detail = "  ".join(f"{k} {v:.3f}" for k, v in sorted(means.items()))
         print(f"epoch {epoch}: loss {sum(losses)/len(losses):.4f} | "
-              f"val recall@k-grid {score:.4f} | {(time.time()-started)/60:.1f}min", flush=True)
+              f"val recall macro {score:.4f} [{detail}] | "
+              f"{(time.time()-started)/60:.1f}min", flush=True)
         if score > best:
             best = score
             ckpt = out_dir / "checkpoint-best"
@@ -150,7 +165,8 @@ def main():
             json.dump({"layer_count": L, "hidden_dim": H, "proj_dim": args.proj_dim,
                        "mlp_dim": args.mlp_dim, "heads": ["score"]},
                       open(ckpt / "config.json", "w"))
-            json.dump({"val_recall": score, "epoch": epoch,
+            json.dump({"val_recall": score, "val_recall_per_dataset": means,
+                       "epoch": epoch, "datasets": datasets,
                        "question_window": args.question_window},
                       open(out_dir / "best.json", "w"))
             print(f"  saved (best {best:.4f})", flush=True)

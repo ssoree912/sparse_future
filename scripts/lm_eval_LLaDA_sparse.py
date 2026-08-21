@@ -51,6 +51,10 @@ class LLaDASparse(LLaDA):
         oracle_reselect_every: int = 1,
         oracle_future_window: bool = False,
         oracle_rows: str = "masked",
+        student_cache_path: str = "",
+        student_score_head: str = "score",
+        student_question_window: int = 128,
+        student_evict_suffix: bool = True,
         sparse_dllm_root: str = SPARSE_DLLM_ROOT,
         dtype: str = "bfloat16",
         **kwargs,
@@ -74,6 +78,13 @@ class LLaDASparse(LLaDA):
             oracle_future_window=_as_bool(oracle_future_window),
             oracle_rows=str(oracle_rows),
         )
+        self._student_path = str(student_cache_path or "")
+        if self._student_path:
+            self.sparse_cfg.update(
+                student_score_head=str(student_score_head),
+                student_question_window=int(student_question_window),
+                student_evict_suffix=_as_bool(student_evict_suffix),
+            )
 
         config = AutoConfig.from_pretrained(str(pretrained), trust_remote_code=True)
         config.block_len = int(block_len)
@@ -89,6 +100,18 @@ class LLaDASparse(LLaDA):
         # needs the path to find the tokenizer.
         kwargs.setdefault("tokenizer", str(pretrained))
         super().__init__(pretrained=model, **kwargs)
+        # 우리 scorer. 비우면 원래 Sparse-dLLM 기준(baseline)으로 돈다.
+        if self._student_path:
+            from sparse_dllm.student_cache import load_prompt_utility_student
+            device = next(model.parameters()).device
+            scorer = load_prompt_utility_student(self._student_path, device)
+            heads = tuple(scorer.config.heads)
+            if self.sparse_cfg["student_score_head"] not in heads:
+                raise RuntimeError(
+                    f"student score head {self.sparse_cfg['student_score_head']!r} "
+                    f"not in {heads}")
+            self.sparse_cfg["cache_scorer"] = scorer
+            print(f"[LLaDA_sparse] student scorer <- {self._student_path}", flush=True)
         print(f"[LLaDA_sparse] keep_ratio={keep_ratio} block_len={block_len} "
               f"{self.sparse_cfg}", flush=True)
 

@@ -50,8 +50,7 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=128, tempera
              student_score_head='attention', student_evict_suffix=False,
              oracle_eviction=False, oracle_pool=True, oracle_per_step=False,
              oracle_reselect_every=1, oracle_future_window=False,
-             oracle_commit_rows=False, oracle_rows='masked', oracle_aggregate='sum', oracle_row_aggregate='sum',
-             reselect_every=0,
+             oracle_commit_rows=False, oracle_rows='masked', reselect_every=0,
              reselect_offload_v=False, reselect_k_bits=0,
              scorer='sparse_dllm'):
     '''
@@ -102,8 +101,6 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=128, tempera
                         score_head=student_score_head,
                         evict_suffix=student_evict_suffix)
         customcache.reselect_every = reselect_every
-        customcache.aggregate = oracle_aggregate
-        customcache.row_aggregate = oracle_row_aggregate
         customcache.offload_v = reselect_offload_v
         customcache.k_bits = reselect_k_bits
         customcache.scorer = scorer
