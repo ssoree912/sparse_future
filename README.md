@@ -65,25 +65,29 @@ python teacher/extract_teacher.py --dataset samsum --n-samples 300 --gen-length 
 **2. Train the scorer.** Pass several teacher roots comma-separated for mixed-domain training; validation is split per domain and the checkpoint is chosen on the domain macro average.
 
 ```bash
-python student/train_student.py \
-  --teacher-root results/budget/teacher/samsum \
-  --output-dir  results/budget/student/samsum
+python student/train_student.py --teacher-root artifacts/teacher/samsum
 ```
+
+The checkpoint lands in `artifacts/ckpts/<name>`, where the name records what
+separates one scorer from another — `1ds_300_e6_lr2e-4_6a5fc6` is 300 samsum
+samples, six epochs, lr 2e-4, and a hash of the domain names. `meta.json` beside
+it lists the domains in full.
 
 **3. Evaluate.** lm-eval is the only harness here.
 
 ```bash
-cd $HARNESS
-python evaluation_script.py --model LLaDA_future \
-  --model_args "pretrained=$MODEL,keep_ratio=0.1,student_path=$CKPT" \
-  --tasks gsm8k --num_fewshot 5 --limit 200 --batch_size 1 \
-  --gen_kwargs "block_length=32,gen_length=256,steps=256,temperature=0.0"
+scripts/run_eval.sh gsm8k 0.1 artifacts/ckpts/1ds_300_e6_lr2e-4_6a5fc6/checkpoint-best
+scripts/run_eval.sh gsm8k 1.0        # no eviction, no scorer needed
 ```
+
+Each run writes one json, `results/<dataset>_keep<ratio>_<timestamp>.json`. The
+script picks the generation length the task was measured with; see the dataset
+table below.
 
 Optionally check the scorer against held-out labels before spending a generation run:
 
 ```bash
-python student/eval_recall.py --student results/budget/student/samsum/checkpoint-best
+python student/eval_recall.py --student artifacts/ckpts/<name>/checkpoint-best
 ```
 
 ## Options
@@ -114,7 +118,15 @@ future_dllm/     the model: CustomCache (eviction), generate (block-wise decodin
 teacher/         prompt shards, and the final × row-max label extractor
 student/         scorer training, and a recall check against held-out labels
 eval/            the lm-eval model, registered as LLaDA_future
+scripts/         run_eval.sh
+artifacts/       prompt shards, teacher labels, checkpoints  (gitignored)
+results/         lm-eval output, one json per run  (gitignored)
 ```
+
+Labels accumulate: raising `--limit` or `--n-samples` extracts only the samples
+that are missing, so an interrupted run resumes and a larger run reuses what is
+there. Artefacts from before the step-1 snapshot fix are kept out of the way in
+`/workspace/dllm/v1_results/sparse_future/`.
 
 ## Notes
 

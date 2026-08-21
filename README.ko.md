@@ -65,25 +65,27 @@ python teacher/extract_teacher.py --dataset samsum --n-samples 300 --gen-length 
 **2. scorer 학습.** 교사 루트를 쉼표로 여러 개 주면 도메인 혼합 학습이 된다. val은 도메인별로 나누고 체크포인트는 도메인 macro 평균으로 고른다.
 
 ```bash
-python student/train_student.py \
-  --teacher-root results/budget/teacher/samsum \
-  --output-dir  results/budget/student/samsum
+python student/train_student.py --teacher-root artifacts/teacher/samsum
 ```
+
+체크포인트는 `artifacts/ckpts/<이름>`에 저장된다. 이름에는 scorer를 구분하는 것만
+들어간다 — `1ds_300_e6_lr2e-4_6a5fc6`은 samsum 300샘플, 6 epoch, lr 2e-4,
+그리고 도메인 이름들의 해시다. 도메인 목록 전체는 옆의 `meta.json`에 있다.
 
 **3. 평가.** 공식 하네스는 lm-eval 하나다.
 
 ```bash
-cd $HARNESS
-python evaluation_script.py --model LLaDA_future \
-  --model_args "pretrained=$MODEL,keep_ratio=0.1,student_path=$CKPT" \
-  --tasks gsm8k --num_fewshot 5 --limit 200 --batch_size 1 \
-  --gen_kwargs "block_length=32,gen_length=256,steps=256,temperature=0.0"
+scripts/run_eval.sh gsm8k 0.1 artifacts/ckpts/1ds_300_e6_lr2e-4_6a5fc6/checkpoint-best
+scripts/run_eval.sh gsm8k 1.0        # 축출 없음, scorer 불필요
 ```
+
+실행마다 json 하나가 `results/<데이터셋>_keep<비율>_<날짜시간>.json`으로 남는다.
+생성 길이는 스크립트가 데이터셋에 맞춰 고른다 — 아래 표 참고.
 
 생성 평가를 돌리기 전에 held-out 라벨로 scorer를 값싸게 확인할 수 있다:
 
 ```bash
-python student/eval_recall.py --student results/budget/student/samsum/checkpoint-best
+python student/eval_recall.py --student artifacts/ckpts/<이름>/checkpoint-best
 ```
 
 ## 옵션
@@ -114,7 +116,14 @@ future_dllm/     모델: CustomCache(축출), generate(블록 단위 디코딩),
 teacher/         프롬프트 shard와 final × row-max 라벨 추출기
 student/         scorer 학습, held-out 라벨 recall 확인
 eval/            lm-eval 모델, LLaDA_future로 등록
+scripts/         run_eval.sh
+artifacts/       프롬프트 shard, 교사 라벨, 체크포인트  (gitignore)
+results/         lm-eval 출력, 실행당 json 하나  (gitignore)
 ```
+
+라벨은 누적된다. `--limit`이나 `--n-samples`를 올리면 없는 샘플만 추출하므로,
+중단된 실행은 이어받고 더 큰 실행은 기존 것을 재사용한다. 스텝 1 스냅샷 수정
+이전 산출물은 `/workspace/dllm/v1_results/sparse_future/`에 따로 옮겨두었다.
 
 ## 메모
 

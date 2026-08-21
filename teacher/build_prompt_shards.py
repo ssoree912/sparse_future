@@ -142,14 +142,18 @@ def main():
     p.add_argument("--model", default="/workspace/dllm/model/LLaDA-8B-Instruct")
     p.add_argument("--chat-template", type=int, default=-1,
                    help="-1이면 데이터셋 기본값(LongBench 계열은 끔)")
-    p.add_argument("--out-root", default=str(REPO_ROOT / "results" / "prompt_shards"))
+    p.add_argument("--out-root", default=str(REPO_ROOT / "artifacts" / "prompt_shards"))
     args = p.parse_args()
 
     chat = (args.dataset not in RAW_TEXT) if args.chat_template < 0 else bool(args.chat_template)
     tok = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
     out = Path(args.out_root) / args.dataset
     out.mkdir(parents=True, exist_ok=True)
+    added = 0
     for sid, text in BUILDERS[args.dataset](args.limit):
+        if (out / f"{sid}.pt").exists():      # raising --limit only adds new samples
+            continue
+        added += 1
         if chat:
             text = tok.apply_chat_template([{"role": "user", "content": text}],
                                            add_generation_prompt=True, tokenize=False)
@@ -158,7 +162,8 @@ def main():
         torch.save({"sample_id": sid, "dataset": args.dataset,
                     "prompt_input_ids": ids.to(torch.long)}, out / f"{sid}.pt")
     n = len(list(out.glob("*.pt")))
-    print(f"{args.dataset}: {n} shards (chat_template={chat}) -> {out}", flush=True)
+    print(f"{args.dataset}: {n} shards total, {added} new "
+          f"(chat_template={chat}) -> {out}", flush=True)
     return 0
 
 

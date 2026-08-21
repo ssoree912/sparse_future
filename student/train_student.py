@@ -13,7 +13,7 @@ selected on mean recall over a k-grid rather than any single budget.
 
 from __future__ import annotations
 
-import argparse, glob, json, random, sys, time
+import argparse, glob, hashlib, json, random, sys, time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -26,11 +26,14 @@ import torch.nn.functional as F
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", default="/workspace/dllm/model/LLaDA-8B-Instruct")
-    p.add_argument("--teacher-root", default=str(REPO_ROOT / "results/teacher/samsum"),
+    p.add_argument("--teacher-root", default=str(REPO_ROOT / "artifacts/teacher/samsum"),
                    help="comma-separated for mixed-domain training: val is split "
                         "per domain and the checkpoint is chosen on the domain "
                         "macro average, so a block-heavy domain cannot own it")
-    p.add_argument("--output-dir", default=str(REPO_ROOT / "results/student/samsum"))
+    p.add_argument("--output-dir", default="",
+                   help="default: artifacts/ckpts/<auto name>, see checkpoint_name()")
+    p.add_argument("--name", default="",
+                   help="override just the directory name under artifacts/ckpts")
     p.add_argument("--epochs", type=int, default=6)
     p.add_argument("--lr", type=float, default=2e-4)
     p.add_argument("--proj-dim", type=int, default=256)
@@ -50,6 +53,19 @@ def recall_grid(pred, target, ratios=(0.05, 0.1, 0.2, 0.3, 0.5)):
         b = set(torch.topk(target, k).indices.tolist())
         out.append(len(a & b) / k)
     return sum(out) / len(out)
+
+
+def checkpoint_name(datasets, counts, epochs, lr):
+    """What separates one scorer from another: which domains, how many samples of
+    each, and the two training knobs. The domain names themselves do not fit in a
+    directory name once there are four of them, so they go in through a hash and
+    are written out in full in meta.json."""
+    tag = hashlib.sha1(",".join(sorted(datasets)).encode()).hexdigest()[:6]
+    lr_text = f"{lr:g}"
+    if "e" not in lr_text and lr < 0.01:      # 0.0002 reads worse than 2e-4
+        lr_text = f"{lr:.1e}".replace(".0e", "e")
+    lr_text = lr_text.replace("e-0", "e-")
+    return f"{len(datasets)}ds_{'-'.join(str(c) for c in counts)}_e{epochs}_lr{lr_text}_{tag}"
 
 
 def main():
@@ -90,13 +106,25 @@ def main():
     print(f"train {len(train_shards)} / val {len(val_shards)} shards "
           f"over {len(datasets)} domain(s)", flush=True)
 
+    counts = [sum(1 for n, _ in train_shards + val_shards if n == d) for d in datasets]
+    out_dir = Path(args.output_dir) if args.output_dir else (
+        REPO_ROOT / "artifacts" / "ckpts" /
+        (args.name or checkpoint_name(datasets, counts, args.epochs, args.lr)))
+    print(f"checkpoint -> {out_dir}", flush=True)
+
     # Same class the deployment path loads, so the checkpoint drops straight in.
     from future_dllm import PromptUtilityStudent, StudentConfig
     student_cfg = StudentConfig(layer_count=L, hidden_dim=H, proj_dim=args.proj_dim,
                                 mlp_dim=args.mlp_dim, heads=("score",))
     student = PromptUtilityStudent(student_cfg).to(device).float()
     opt = torch.optim.AdamW(student.parameters(), lr=args.lr, weight_decay=0.01)
-    out_dir = Path(args.output_dir); out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    json.dump({"datasets": datasets, "samples": dict(zip(datasets, counts)),
+               "epochs": args.epochs, "lr": args.lr, "seed": args.seed,
+               "proj_dim": args.proj_dim, "mlp_dim": args.mlp_dim,
+               "question_window": args.question_window, "val_ratio": args.val_ratio,
+               "teacher_roots": roots},
+              open(out_dir / "meta.json", "w"), indent=2)
 
     @torch.no_grad()
     def features(record):

@@ -25,8 +25,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", default="/workspace/dllm/model/LLaDA-8B-Instruct")
     p.add_argument("--student",
-                   default=str(REPO_ROOT / "results/student/samsum/checkpoint-best"))
-    p.add_argument("--root", default=str(REPO_ROOT / "results"))
+                   default=str(REPO_ROOT / "artifacts/ckpts/1ds_300_e6_lr2e-4_6a5fc6/checkpoint-best"))
+    p.add_argument("--root", default=str(REPO_ROOT / "artifacts"))
     p.add_argument("--datasets", default="samsum,gsm8k,mmlu,mbpp")
     p.add_argument("--shards", type=int, default=25)
     p.add_argument("--question-window", type=int, default=128)

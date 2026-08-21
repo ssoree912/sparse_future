@@ -1,4 +1,10 @@
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
-results/
+
+# Labels and checkpoints are large and reproducible; only the READMEs that
+# document their layout are tracked.
+artifacts/*
+!artifacts/README.md
+results/*
+!results/README.md

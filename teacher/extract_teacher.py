@@ -35,8 +35,8 @@ def parse_args():
     p.add_argument("--model", default="/workspace/dllm/model/LLaDA-8B-Instruct")
     p.add_argument("--dataset", required=True,
                    help="prompt shard directory name, e.g. samsum / gsm8k / mmlu")
-    p.add_argument("--shard-root", default=str(REPO_ROOT / "results" / "prompt_shards"))
-    p.add_argument("--output-root", default=str(REPO_ROOT / "results" / "teacher"))
+    p.add_argument("--shard-root", default=str(REPO_ROOT / "artifacts" / "prompt_shards"))
+    p.add_argument("--output-root", default=str(REPO_ROOT / "artifacts" / "teacher"))
     p.add_argument("--n-samples", type=int, default=300)
     p.add_argument("--gen-length", type=int, default=128)
     p.add_argument("--block-length", type=int, default=32)
@@ -133,11 +133,14 @@ def main():
     if not shards:
         raise SystemExit(f"no prompt shards under {args.shard_root}/{args.dataset} "
                          f"- run teacher/build_prompt_shards.py first")
-    started = time.time()
+    started, added = time.time(), 0
     for i, path in enumerate(shards):
         target = out / Path(path).name
-        if target.exists():                   # resume: shards already done are skipped
+        # Labels accumulate: an interrupted run resumes, and raising --n-samples
+        # only extracts the samples that are not there yet.
+        if target.exists():
             continue
+        added += 1
         src = torch.load(path, map_location="cpu", weights_only=False)
         records = collect(model, src["prompt_input_ids"].to(torch.long), args)
         torch.save({"sample_id": src.get("sample_id"),
@@ -148,7 +151,8 @@ def main():
         if (i + 1) % 10 == 0:
             print(f"{i + 1}/{len(shards)}  {(time.time() - started) / (i + 1):.1f}s/sample",
                   flush=True)
-    print(f"done: {len(list(out.glob('*.pt')))} shards -> {out}", flush=True)
+    print(f"done: {len(list(out.glob('*.pt')))} shards total, {added} new -> {out}",
+          flush=True)
     return 0
 
 
