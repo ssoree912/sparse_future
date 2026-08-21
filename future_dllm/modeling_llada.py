@@ -546,6 +546,8 @@ class CustomCache:
         device: torch.device,
         keep_ratio: float = 1.0,
         cache_scorer=None,
+        scorer: str = "future",
+        pool_kernel_size: int = 3,      # baseline criterion only
         prompt_length: int = 0,
         generation_length: int = 0,
         question_window: int = 128,
@@ -553,6 +555,8 @@ class CustomCache:
         self.cache = {}
         self.keep_ratios = [keep_ratio for _ in range(n_layers)]
         self.cache_scorer = cache_scorer
+        self.scorer = scorer
+        self.pool_kernel_size = pool_kernel_size
         self.prompt_length = prompt_length
         self.generation_length = generation_length
         self.question_window = question_window
@@ -615,10 +619,33 @@ class CustomCache:
             self.cache[layer_id] = {"k": keep_k, "v": keep_v}
             return
 
+        if self.scorer == "baseline":
+            # Sparse-dLLM's criterion, kept only as the reference to compare
+            # against: average the block's queries into one, score candidates by
+            # raw dot product, mean over heads, then max-pool over positions.
+            # Reproduced from https://github.com/OpenMOSS/Sparse-dLLM.
+            k_attn = keep_k
+            if q_block.size(1) != keep_k.size(1):
+                k_attn = keep_k.repeat_interleave(q_block.size(1) // keep_k.size(1), dim=1)
+            importance = torch.matmul(
+                q_block.mean(dim=-2).unsqueeze(-2), k_attn.transpose(-2, -1)
+            ).squeeze(-2).mean(dim=1)
+            if self.pool_kernel_size:
+                importance = F.max_pool1d(
+                    importance.unsqueeze(1), kernel_size=self.pool_kernel_size,
+                    stride=1, padding=self.pool_kernel_size // 2).squeeze(1)
+            keep_num = int(importance.size(-1) * self.keep_ratios[layer_id])
+            keep_indices = torch.topk(importance, k=keep_num, dim=-1).indices.squeeze(0).sort().values
+            head_index = torch.arange(keep_k.size(1), device=keep_k.device)[:, None]
+            self.cache[layer_id] = {"k": keep_k[:, head_index, keep_indices],
+                                    "v": keep_v[:, head_index, keep_indices]}
+            return
+
         if self.cache_scorer is None:
             raise RuntimeError(
                 "future_dllm evicts with a trained scorer; pass a student "
-                "checkpoint, or run with keep_ratio=1.0 to disable eviction"
+                "checkpoint, scorer='baseline' for the Sparse-dLLM criterion, "
+                "or keep_ratio=1.0 to disable eviction"
             )
 
         hidden_states = self.layer_hidden_states.pop(layer_id, None)

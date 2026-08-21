@@ -4,14 +4,15 @@
 #   scripts/run_eval.sh <dataset> <keep_ratio> [checkpoint]
 #
 #   scripts/run_eval.sh samsum 0.1 artifacts/ckpts/1ds_300_e6_lr2e-4_6a5fc6/checkpoint-best
-#   scripts/run_eval.sh gsm8k  1.0        # no eviction, no scorer needed
+#   scripts/run_eval.sh samsum 0.1 baseline    # Sparse-dLLM's criterion
+#   scripts/run_eval.sh gsm8k  1.0             # no eviction, no scorer needed
 #
 # Generation length, stop strings and shot count come from the lm-eval task, not
 # from here.
 set -euo pipefail
 
-DATASET="${1:?usage: run_eval.sh <dataset> <keep_ratio> [checkpoint]}"
-KEEP="${2:?usage: run_eval.sh <dataset> <keep_ratio> [checkpoint]}"
+DATASET="${1:?usage: run_eval.sh <dataset> <keep_ratio> [checkpoint|baseline]}"
+KEEP="${2:?usage: run_eval.sh <dataset> <keep_ratio> [checkpoint|baseline]}"
 CKPT="${3:-}"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -48,7 +49,11 @@ for y in "$REPO"/eval/tasks/longbench/*.yaml; do
 done
 
 ARGS="pretrained=$MODEL,block_len=32,keep_ratio=$KEEP"
-[ -n "$CKPT" ] && ARGS="$ARGS,student_path=$(cd "$(dirname "$CKPT")" && pwd)/$(basename "$CKPT")"
+if [ "$CKPT" = "baseline" ]; then
+  ARGS="$ARGS,scorer=baseline"          # Sparse-dLLM's criterion, for comparison
+elif [ -n "$CKPT" ]; then
+  ARGS="$ARGS,student_path=$(cd "$(dirname "$CKPT")" && pwd)/$(basename "$CKPT")"
+fi
 
 # Answers are appended as they are produced, so a segfault costs only the item in
 # flight. Keyed on the exact model args, so one scorer never reads another's.

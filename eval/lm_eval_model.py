@@ -57,6 +57,7 @@ class LLaDAFuture(HFLM):
         block_len: int = 32,
         max_prompt_len: int = 2048,
         student_path: str = "",
+        scorer: str = "future",
         question_window: int = 128,
         dtype: str = "bfloat16",
         **kwargs,
@@ -67,6 +68,7 @@ class LLaDAFuture(HFLM):
         self._generate = generate
         self._question_window = int(question_window)
         self._block_len = int(block_len)
+        self._scorer_kind = str(scorer)
         self._max_prompt_len = int(max_prompt_len)
 
         config = AutoConfig.from_pretrained(str(pretrained), trust_remote_code=True)
@@ -97,13 +99,13 @@ class LLaDAFuture(HFLM):
         self._scorer = None
         if student_path:
             self._scorer = load_prompt_utility_student(student_path, device)
-        elif float(keep_ratio) < 1.0:
+        elif float(keep_ratio) < 1.0 and self._scorer_kind != "baseline":
             raise ValueError(
                 "eviction needs a trained scorer: pass student_path=<checkpoint>, "
-                "or keep_ratio=1.0 to run without eviction")
+                "scorer=baseline for the Sparse-dLLM criterion, or keep_ratio=1.0")
         print(f"[LLaDA_future] keep_ratio={keep_ratio} block_len={block_len} "
               f"max_prompt_len={max_prompt_len} "
-              f"scorer={student_path or 'none (no eviction)'}", flush=True)
+              f"scorer={student_path or scorer}", flush=True)
 
     @torch.no_grad()
     def generate_until(self, requests: List[Instance], disable_tqdm: bool = False) -> List[str]:
@@ -160,6 +162,7 @@ class LLaDAFuture(HFLM):
                 remasking=gen_kwargs.get("remasking") or "low_confidence",
                 cache_scorer=self._scorer,
                 question_window=self._question_window,
+                scorer=self._scorer_kind,
             )
             text = self.tokenizer.decode(out[0, context_enc.shape[1]:],
                                          skip_special_tokens=True)

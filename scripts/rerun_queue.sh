@@ -24,6 +24,8 @@ run () {   # $1=dataset  $2=keep_ratio  $3=checkpoint or ""
 }
 
 run samsum 1.0 ""          # independent re-measure: ours reads above the ceiling
+run samsum 0.1 baseline    # Sparse-dLLM criterion, same data and prompt
 run gsm8k  1.0 ""
+run gsm8k  0.1 baseline
 run gsm8k  0.1 "$CK"
 echo -e "\n=== 전체 완료 $(date +%H:%M) ==="
