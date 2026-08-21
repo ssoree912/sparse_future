@@ -80,4 +80,9 @@ python eval/run.py \
 # result, so it comes out flat and the scratch directory goes away.
 mv "$(find "$TMP/out" -name 'results_*.json' | sort | tail -1)" "$RESULT"
 rm -rf "$TMP"
+
+# The resume store exists to survive a crash, and the run is over. Keeping it
+# would make the next run of the same arguments replay these answers - including
+# after a code change, since the key covers the arguments and not the code.
+rm -f "$FUTURE_DLLM_RESUME"
 echo "wrote $RESULT"
