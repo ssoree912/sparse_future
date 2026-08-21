@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lm-eval, writing one json into results/ per run.
+# lm-eval, writing one json per run into results/keep<ratio>/<dataset>/.
 #
 #   scripts/run_eval.sh <dataset> <keep_ratio> [checkpoint]
 #
@@ -36,7 +36,8 @@ case "$DATASET" in
 esac
 
 STAMP="$(date +%Y%m%d_%H%M%S)"
-RESULT="$REPO/results/${DATASET}_keep${KEEP}_${STAMP}.json"
+RESULT="$REPO/results/keep${KEEP}/${DATASET}/${DATASET}_keep${KEEP}_${STAMP}.json"
+mkdir -p "$(dirname "$RESULT")"
 TMP="$REPO/results/.run_${DATASET}_${STAMP}"
 
 # The LongBench task files carry a placeholder for the data directory, so the
