@@ -32,6 +32,50 @@ MATH_INSTRUCTION = ("Please reason step by step, and put your final answer withi
                     "\\boxed{}.")
 
 
+def _drop_test_overlap(table, column, test_glob):
+    """MMLU and MBPP each repeat a few items across splits upstream - 43 of MMLU's
+    1816 validation+dev questions appear verbatim in test, and three MBPP task
+    descriptions do under a different task_id. Drop them before sampling."""
+    import pandas as pd, re
+    frames = [pd.read_parquet(f) for f in sorted(glob.glob(str(test_glob)))]
+    if not frames:
+        return table
+    norm = lambda s: re.sub(r"\s+", " ", str(s)).strip().lower()
+    seen = {norm(v) for v in pd.concat(frames)[column]}
+    keep = [norm(v) not in seen for v in table[column]]
+    dropped = len(keep) - sum(keep)
+    if dropped:
+        print(f"  dropped {dropped} rows that also appear in test", flush=True)
+    return table[keep]
+
+
+def _balanced(table, columns, limit, seed=0):
+    """Take `limit` rows spread evenly over the sub-categories.
+
+    Several of these datasets arrive sorted by category - MMLU's validation split
+    is in subject order - so head(limit) picks the first few subjects and nothing
+    else. Taking one row from each group in turn covers all of them, and a group
+    that runs out simply drops out of the rotation.
+    """
+    import pandas as pd
+    if not columns or not all(c in table.columns for c in columns):
+        return table.sample(frac=1.0, random_state=seed).head(limit)
+    groups = [g.sample(frac=1.0, random_state=seed).to_dict("records")
+              for _, g in table.groupby(list(columns), sort=True)]
+    out, i = [], 0
+    while len(out) < limit and any(groups):
+        g = groups[i % len(groups)]
+        if g:
+            out.append(g.pop())
+        i += 1
+        if i % max(1, len(groups)) == 0:
+            groups = [g for g in groups if g]
+            i = 0
+            if not groups:
+                break
+    return pd.DataFrame(out[:limit])
+
+
 def samsum(limit):
     """LongBench-style single dialogue, byte-for-byte the format the first 300
     teacher shards were built with (no chat template, no few-shot block)."""
@@ -61,7 +105,9 @@ def mmlu(limit):
     import pandas as pd
     frames = [pd.read_parquet(f) for split in ("validation", "dev")
               for f in glob.glob(str(DATA / f"eval/mmlu/all/{split}-*.parquet"))]
-    table = pd.concat(frames).head(limit)
+    table = _drop_test_overlap(pd.concat(frames), "question",
+                               DATA / "eval/mmlu/all/test-*.parquet")
+    table = _balanced(table, ["subject"], limit)               # 57 subjects
     out = []
     for i, row in enumerate(table.itertuples()):
         options = "\n".join(f"{chr(65 + j)}. {c}" for j, c in enumerate(row.choices))
@@ -76,7 +122,7 @@ def mbpp(limit):
     import pandas as pd
     frames = [pd.read_parquet(f) for split in ("validation", "prompt")
               for f in glob.glob(str(DATA / f"eval/mbpp/full/{split}-*.parquet"))]
-    table = pd.concat(frames).head(limit)
+    table = _balanced(pd.concat(frames), [], limit)
     return [(f"mbpp-{i}",
              f"You are an expert Python programmer. {row.text}\n"
              f"Your code should pass these tests:\n" + "\n".join(row.test_list) + "\n")
@@ -114,15 +160,17 @@ def math(limit):
     import pandas as pd
     frames = [pd.read_parquet(f) for f
               in sorted(glob.glob(str(DATA / "train/hendrycks_math/*/train-*.parquet")))]
-    table = pd.concat(frames).sample(frac=1.0, random_state=0).head(limit)
+    table = _balanced(pd.concat(frames), ["type", "level"], limit)  # 7 x 5 cells
     return [(f"math-{i}", f"{row.problem}\n\n{MATH_INSTRUCTION}")
             for i, row in enumerate(table.itertuples())]
 
 
 def mbpp_full(limit):
     import pandas as pd
-    table = pd.read_parquet(
-        DATA / "train/mbpp/full/train-00000-of-00001.parquet").head(limit)
+    table = _drop_test_overlap(
+        pd.read_parquet(DATA / "train/mbpp/full/train-00000-of-00001.parquet"),
+        "text", DATA / "eval/mbpp/full/test-*.parquet")
+    table = _balanced(table, [], limit)
     return [(f"mbppfull-{i}",
              f"You are an expert Python programmer. {row.text}\n"
              f"Your code should pass these tests:\n" + "\n".join(row.test_list) + "\n")
