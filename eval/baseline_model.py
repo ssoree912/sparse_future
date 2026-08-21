@@ -1,8 +1,9 @@
 """lm-eval model for the Sparse-dLLM baseline, registered as ``LLaDA_sparse``.
 
-The eviction code is the authors' own, vendored unmodified under
-``eval/baseline/sparse_dllm/``; only the harness around it is ours, so the
-baseline row and our row come out of the same tasks, data, prompts and scoring.
+The eviction code is the authors' own, fetched by ``scripts/fetch_baseline.sh``
+into ``eval/baseline/`` and not kept in this repository; only the harness around
+it is ours, so the baseline row and our row come out of the same tasks, data,
+prompts and scoring.
 
     --model LLaDA_sparse --model_args "pretrained=<model>,keep_ratio=0.1"
 """
@@ -31,7 +32,11 @@ class LLaDASparseBaseline(LLaDAFuture):
                  max_prompt_len: int = 2048, dtype: str = "bfloat16", **kwargs):
         from transformers import AutoConfig
         from lm_eval.models.huggingface import HFLM
-        from sparse_dllm import LLaDAModelLM, generate
+        try:
+            from sparse_dllm import LLaDAModelLM, generate
+        except ImportError as exc:
+            raise RuntimeError(
+                "Sparse-dLLM is not here: run scripts/fetch_baseline.sh") from exc
 
         self._generate = generate
         self._block_len = int(block_len)

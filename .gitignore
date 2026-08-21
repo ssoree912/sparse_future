@@ -8,3 +8,6 @@ artifacts/*
 !artifacts/README.md
 results/*
 !results/README.md
+
+# fetched by scripts/fetch_baseline.sh
+eval/baseline/

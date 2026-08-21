@@ -9,6 +9,8 @@ Model: `GSAI-ML/LLaDA-8B-Instruct`
 ```bash
 conda env create -f environment.yml
 conda activate dllm
+
+scripts/fetch_baseline.sh     # only to run the Sparse-dLLM baseline row
 ```
 
 Commands run from the repo root. Two paths are expected beside the repo and can be overridden:
