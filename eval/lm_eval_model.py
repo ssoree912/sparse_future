@@ -85,10 +85,18 @@ class LLaDAFuture(HFLM):
         kwargs.setdefault("trust_remote_code", True)
         super().__init__(pretrained=model, **kwargs)
 
+        # This box drops CUDA initialisation now and then, and device_map="auto"
+        # answers by placing the model on CPU. That produces answers rather than a
+        # crash, and the resume store would keep them - so refuse to start.
+        device = next(model.parameters()).device
+        if device.type != "cuda":
+            raise RuntimeError(
+                f"model landed on {device}, not CUDA - CUDA init likely failed; "
+                "rerun rather than evaluate on CPU")
+
         self._scorer = None
         if student_path:
-            self._scorer = load_prompt_utility_student(
-                student_path, next(model.parameters()).device)
+            self._scorer = load_prompt_utility_student(student_path, device)
         elif float(keep_ratio) < 1.0:
             raise ValueError(
                 "eviction needs a trained scorer: pass student_path=<checkpoint>, "
