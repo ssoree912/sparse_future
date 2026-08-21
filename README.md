@@ -16,7 +16,7 @@ Commands run from the repo root. Two paths are expected beside the repo and can 
 | | default | override |
 |---|---|---|
 | model | `../model/LLaDA-8B-Instruct` | `FUTURE_DLLM_MODEL`, or `--model` |
-| LongBench parquets | `../data/eval/longbench` | `LONGBENCH_DATA` |
+| LongBench data | `../data/longbench/data` | `LONGBENCH_DATA` |
 
 ## Datasets
 

@@ -16,7 +16,7 @@ conda activate dllm
 | | 기본값 | 변경 |
 |---|---|---|
 | 모델 | `../model/LLaDA-8B-Instruct` | `FUTURE_DLLM_MODEL` 또는 `--model` |
-| LongBench parquet | `../data/eval/longbench` | `LONGBENCH_DATA` |
+| LongBench 데이터 | `../data/longbench/data` | `LONGBENCH_DATA` |
 
 ## 데이터셋
 

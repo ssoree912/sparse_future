@@ -16,10 +16,11 @@ CKPT="${3:-}"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODEL="${FUTURE_DLLM_MODEL:-$REPO/../model/LLaDA-8B-Instruct}"
-LONGBENCH_DATA="${LONGBENCH_DATA:-$REPO/../data/eval/longbench}"
+LONGBENCH_DATA="${LONGBENCH_DATA:-$REPO/../data/longbench/data}"
 
 case "$DATASET" in
-  samsum|2wikimqa|trec|triviaqa|qasper|gov_report)
+  samsum|trec|triviaqa|2wikimqa|hotpotqa|musique|qasper|narrativeqa|multifieldqa_en|\
+  gov_report|qmsum|multi_news|lcc|repobench-p|passage_retrieval_en|passage_count)
           TASK="longbench_$DATASET"; SHOTS="" ;;
   gsm8k)  TASK=gsm8k;               SHOTS="--num_fewshot 5" ;;
   mmlu)   TASK=mmlu_generative;     SHOTS="--num_fewshot 5" ;;
