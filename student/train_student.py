@@ -25,7 +25,7 @@ import torch.nn.functional as F
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--model", default="/workspace/dllm/model/LLaDA-8B-Instruct")
+    p.add_argument("--model", default=str(REPO_ROOT / ".." / "model" / "LLaDA-8B-Instruct"))
     p.add_argument("--teacher-root", default=str(REPO_ROOT / "artifacts/teacher/samsum"),
                    help="comma-separated for mixed-domain training: val is split "
                         "per domain and the checkpoint is chosen on the domain "

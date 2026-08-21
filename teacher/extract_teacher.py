@@ -32,7 +32,7 @@ MASK_ID = 126336
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--model", default="/workspace/dllm/model/LLaDA-8B-Instruct")
+    p.add_argument("--model", default=str(REPO_ROOT / ".." / "model" / "LLaDA-8B-Instruct"))
     p.add_argument("--dataset", required=True,
                    help="prompt shard directory name, e.g. samsum / gsm8k / mmlu")
     p.add_argument("--shard-root", default=str(REPO_ROOT / "artifacts" / "prompt_shards"))

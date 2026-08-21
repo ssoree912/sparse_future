@@ -16,8 +16,8 @@ KEEP="${2:?usage: run_eval.sh <dataset> <keep_ratio> [checkpoint]}"
 CKPT="${3:-}"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HARNESS="${FUTURE_DLLM_HARNESS:-/workspace/dllm/dLLM_f}"
-MODEL="${FUTURE_DLLM_MODEL:-/workspace/dllm/model/LLaDA-8B-Instruct}"
+HARNESS="${FUTURE_DLLM_HARNESS:-$REPO/../dLLM_f}"
+MODEL="${FUTURE_DLLM_MODEL:-$REPO/../model/LLaDA-8B-Instruct}"
 TASKS_DIR="$HARNESS/experiment/345/2026-08-13/tasks/longbench_full_local"
 
 case "$DATASET" in
@@ -37,7 +37,7 @@ ARGS="pretrained=$MODEL,block_len=32,max_length=$MAXLEN,keep_ratio=$KEEP"
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
-export HF_HOME=/workspace/dllm/.hf_cache HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export HF_HOME="$REPO/../.hf_cache" HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 export TOKENIZERS_PARALLELISM=false
 
 echo "$DATASET keep=$KEEP -> $RESULT"

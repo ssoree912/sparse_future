@@ -21,4 +21,4 @@ Current numbers, keep 0.1, 200 items:
 ² mixed-domain scorer, trained before the fix — its labels for gsm8k, mmlu and
 mbpp have not been re-extracted yet, so this row is one generation behind the code.
 
-Runs from before the fix are in `/workspace/dllm/v1_results/sparse_future/results/`.
+Runs from before the fix are in `../v1_results/sparse_future/results/`.

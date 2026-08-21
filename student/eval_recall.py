@@ -23,7 +23,7 @@ def recall_grid(pred, target, ratios=(0.05, 0.1, 0.2, 0.3, 0.5)):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--model", default="/workspace/dllm/model/LLaDA-8B-Instruct")
+    p.add_argument("--model", default=str(REPO_ROOT / ".." / "model" / "LLaDA-8B-Instruct"))
     p.add_argument("--student",
                    default=str(REPO_ROOT / "artifacts/ckpts/1ds_300_e6_lr2e-4_6a5fc6/checkpoint-best"))
     p.add_argument("--root", default=str(REPO_ROOT / "artifacts"))

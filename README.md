@@ -9,14 +9,17 @@ conda activate dllm          # torch 2.5.1+cu124, transformers 4.46.3, lm-eval 0
 ```
 
 Model: [LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct), local copy at
-`/workspace/dllm/model/LLaDA-8B-Instruct`. One GPU, batch size 1 — the cache state is per sequence.
+`../model/LLaDA-8B-Instruct`. One GPU, batch size 1 — the cache state is per sequence.
+
+Every command below runs from the repo root, and every path is relative to it. Two things live
+beside the repo rather than inside it: the model at `../model/`, and the lm-eval harness at
+`../dLLM_f/`. Override either with `FUTURE_DLLM_MODEL` / `FUTURE_DLLM_HARNESS`, or `--model`.
 
 Register the lm-eval model once. The package stays in this repo, so there is a single copy:
 
 ```bash
-HARNESS=/workspace/dllm/dLLM_f
-ln -sf $(pwd)/eval/LLaDA_future.py $HARNESS/eval_model/LLaDA_future.py
-echo "from .LLaDA_future import LLaDAFuture" >> $HARNESS/eval_model/__init__.py
+ln -sf $(pwd)/eval/LLaDA_future.py ../dLLM_f/eval_model/LLaDA_future.py
+echo "from .LLaDA_future import LLaDAFuture" >> ../dLLM_f/eval_model/__init__.py
 ```
 
 ## Datasets

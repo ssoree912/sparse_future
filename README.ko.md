@@ -9,14 +9,17 @@ conda activate dllm          # torch 2.5.1+cu124, transformers 4.46.3, lm-eval 0
 ```
 
 모델: [LLaDA-8B-Instruct](https://huggingface.co/GSAI-ML/LLaDA-8B-Instruct), 로컬 사본은
-`/workspace/dllm/model/LLaDA-8B-Instruct`. GPU 1장, batch size 1 — 캐시 상태가 시퀀스마다 다르다.
+`../model/LLaDA-8B-Instruct`. GPU 1장, batch size 1 — 캐시 상태가 시퀀스마다 다르다.
+
+아래 명령어는 전부 저장소 루트에서 실행하고, 경로도 전부 그 기준이다. 저장소 밖에 있는 것은
+둘뿐이다 — 모델 `../model/`, lm-eval 하네스 `../dLLM_f/`. 각각 `FUTURE_DLLM_MODEL` /
+`FUTURE_DLLM_HARNESS` 환경변수나 `--model` 인자로 바꿀 수 있다.
 
 lm-eval 모델은 한 번만 등록한다. 패키지는 이 저장소에 그대로 두므로 사본이 하나뿐이다:
 
 ```bash
-HARNESS=/workspace/dllm/dLLM_f
-ln -sf $(pwd)/eval/LLaDA_future.py $HARNESS/eval_model/LLaDA_future.py
-echo "from .LLaDA_future import LLaDAFuture" >> $HARNESS/eval_model/__init__.py
+ln -sf $(pwd)/eval/LLaDA_future.py ../dLLM_f/eval_model/LLaDA_future.py
+echo "from .LLaDA_future import LLaDAFuture" >> ../dLLM_f/eval_model/__init__.py
 ```
 
 ## 데이터셋

@@ -31,4 +31,4 @@ since four names do not fit in a directory name:
 dimensions and the teacher roots it was trained from.
 
 Everything produced before the step-1 snapshot fix lives in
-`/workspace/dllm/v1_results/sparse_future/`.
+`../v1_results/sparse_future/`.
