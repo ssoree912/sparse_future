@@ -11,6 +11,7 @@ conda env create -f environment.yml
 conda activate dllm
 
 scripts/fetch_baseline.sh     # only to run the Sparse-dLLM baseline row
+scripts/fetch_origin.sh       # only to run stock LLaDA
 ```
 
 Commands run from the repo root. Two paths are expected beside the repo and can be overridden:
@@ -60,10 +61,12 @@ Comma-separate roots for mixed-domain training. `--epochs`, `--lr`, `--name`.
 scripts/run_eval.sh <dataset> <keep_ratio> [checkpoint]
 
 scripts/run_eval.sh samsum 0.1 artifacts/ckpts/1ds_300_e6_lr2e-4_6a5fc6/checkpoint-best
-scripts/run_eval.sh gsm8k  1.0        # no eviction, no checkpoint
+scripts/run_eval.sh samsum 0.1 baseline   # Sparse-dLLM's criterion
+scripts/run_eval.sh gsm8k  1.0            # no eviction, no checkpoint
+scripts/run_eval.sh gsm8k  origin         # stock LLaDA, no cache at all
 ```
 
-→ `results/<dataset>_keep<ratio>_<timestamp>.json`. `keep_ratio` under 1.0 needs a checkpoint.
+→ `results/<model>/keep<ratio>/<dataset>/…json`, or `results/origin/<dataset>/…json`. `keep_ratio` under 1.0 needs a checkpoint.
 `LIMIT` sets the number of items (default 200). Generation length, stop strings and shot count come
 from the lm-eval task definition; LongBench tasks are in `eval/tasks/longbench/`, the rest are
 lm-eval's own.

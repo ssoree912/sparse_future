@@ -3,8 +3,13 @@
 Not tracked by git. One lm-eval run, one json:
 
 ```
-keep<ratio>/<dataset>/<dataset>_keep<ratio>_<YYYYmmdd_HHMMSS>.json
+<model>/keep<ratio>/<dataset>/<dataset>_keep<ratio>_<method>_<YYYYmmdd_HHMMSS>.json
+origin/<dataset>/<dataset>_origin_<YYYYmmdd_HHMMSS>.json
 ```
+
+`<method>` is `none` (no eviction), `baseline` (Sparse-dLLM's criterion) or the
+checkpoint's name. Stock LLaDA keeps no cache to take a fraction of, so it gets
+its own tree rather than a keep ratio.
 
 Written by `scripts/run_eval.sh <dataset> <keep_ratio> [checkpoint|baseline]`,
 which also takes the generation length from the lm-eval task.

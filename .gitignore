@@ -11,3 +11,4 @@ results/*
 
 # fetched by scripts/fetch_baseline.sh
 eval/baseline/
+eval/origin/

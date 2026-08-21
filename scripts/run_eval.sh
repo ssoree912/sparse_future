@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# lm-eval, writing one json per run into results/keep<ratio>/<dataset>/.
+# lm-eval, writing one json per run into
+# results/<model>/keep<ratio>/<dataset>/.
 #
 #   scripts/run_eval.sh <dataset> <keep_ratio> [checkpoint]
 #
 #   scripts/run_eval.sh samsum 0.1 artifacts/ckpts/1ds_300_e6_lr2e-4_6a5fc6/checkpoint-best
 #   scripts/run_eval.sh samsum 0.1 baseline    # Sparse-dLLM's criterion
 #   scripts/run_eval.sh gsm8k  1.0             # no eviction, no scorer needed
+#   scripts/run_eval.sh gsm8k  origin          # stock LLaDA, no cache at all
 #
 # Generation length, stop strings and shot count come from the lm-eval task, not
 # from here.
@@ -35,8 +37,29 @@ case "$DATASET" in
   *) echo "unknown dataset: $DATASET" >&2; exit 1 ;;
 esac
 
+MODEL_NAME=LLaDA_future
+ARGS="pretrained=$MODEL,block_len=32,keep_ratio=$KEEP"
+METHOD=none                             # which selection rule produced this row
+if [ "$KEEP" = "origin" ]; then
+  MODEL_NAME=LLaDA_origin               # stock LLaDA: no cache, recomputed each step
+  ARGS="pretrained=$MODEL"
+  METHOD=origin
+elif [ "$CKPT" = "baseline" ]; then
+  MODEL_NAME=LLaDA_sparse               # the authors' code, fetched not vendored
+  METHOD=baseline
+elif [ -n "$CKPT" ]; then
+  ARGS="$ARGS,student_path=$(cd "$(dirname "$CKPT")" && pwd)/$(basename "$CKPT")"
+  METHOD=$(basename "$(dirname "$CKPT")")
+fi
+MODEL_TAG="${FUTURE_DLLM_MODEL_TAG:-$(basename "$MODEL")}"
+
 STAMP="$(date +%Y%m%d_%H%M%S)"
-RESULT="$REPO/results/keep${KEEP}/${DATASET}/${DATASET}_keep${KEEP}_${STAMP}.json"
+if [ "$METHOD" = "origin" ]; then
+  # Stock LLaDA has no cache to keep a fraction of, so it gets its own tree.
+  RESULT="$REPO/results/origin/${DATASET}/${DATASET}_origin_${STAMP}.json"
+else
+  RESULT="$REPO/results/${MODEL_TAG}/keep${KEEP}/${DATASET}/${DATASET}_keep${KEEP}_${METHOD}_${STAMP}.json"
+fi
 mkdir -p "$(dirname "$RESULT")"
 TMP="$REPO/results/.run_${DATASET}_${STAMP}"
 
@@ -49,17 +72,10 @@ for y in "$REPO"/eval/tasks/longbench/*.yaml; do
   sed "s|LONGBENCH_DATA_DIR|$LONGBENCH_DATA|" "$y" > "$TASKS_DIR/$(basename "$y")"
 done
 
-MODEL_NAME=LLaDA_future
-ARGS="pretrained=$MODEL,block_len=32,keep_ratio=$KEEP"
-if [ "$CKPT" = "baseline" ]; then
-  MODEL_NAME=LLaDA_sparse               # the authors' code, vendored unmodified
-elif [ -n "$CKPT" ]; then
-  ARGS="$ARGS,student_path=$(cd "$(dirname "$CKPT")" && pwd)/$(basename "$CKPT")"
-fi
 
 # Answers are appended as they are produced, so a segfault costs only the item in
 # flight. Keyed on the exact model args, so one scorer never reads another's.
-export FUTURE_DLLM_RESUME="$REPO/results/.resume/${DATASET}_keep${KEEP}_$(printf %s "$ARGS" | md5sum | cut -c1-8).jsonl"
+export FUTURE_DLLM_RESUME="$REPO/results/.resume/${MODEL_TAG}_${DATASET}_keep${KEEP}_${METHOD}_$(printf %s "$ARGS" | md5sum | cut -c1-8).jsonl"
 mkdir -p "$(dirname "$FUTURE_DLLM_RESUME")"
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
