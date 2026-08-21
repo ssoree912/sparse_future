@@ -21,6 +21,8 @@ from __future__ import annotations
 import argparse, glob, json
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 import torch
 from transformers import AutoTokenizer
 
@@ -140,7 +142,7 @@ def main():
     p.add_argument("--model", default="/workspace/dllm/model/LLaDA-8B-Instruct")
     p.add_argument("--chat-template", type=int, default=-1,
                    help="-1이면 데이터셋 기본값(LongBench 계열은 끔)")
-    p.add_argument("--out-root", default="/workspace/dllm/dLLM_f/results/budget/prompt_shards")
+    p.add_argument("--out-root", default=str(REPO_ROOT / "results" / "prompt_shards"))
     args = p.parse_args()
 
     chat = (args.dataset not in RAW_TEXT) if args.chat_template < 0 else bool(args.chat_template)

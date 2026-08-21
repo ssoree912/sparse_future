@@ -16,6 +16,8 @@ from __future__ import annotations
 import argparse, glob, json, random, sys, time
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -24,13 +26,11 @@ import torch.nn.functional as F
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", default="/workspace/dllm/model/LLaDA-8B-Instruct")
-    p.add_argument("--teacher-root", default="/workspace/dllm/dLLM_f/results/budget/"
-                                             "teacher/samsum",
+    p.add_argument("--teacher-root", default=str(REPO_ROOT / "results/teacher/samsum"),
                    help="comma-separated for mixed-domain training: val is split "
                         "per domain and the checkpoint is chosen on the domain "
                         "macro average, so a block-heavy domain cannot own it")
-    p.add_argument("--output-dir", default="/workspace/dllm/dLLM_f/results/budget/"
-                                           "student/samsum")
+    p.add_argument("--output-dir", default=str(REPO_ROOT / "results/student/samsum"))
     p.add_argument("--epochs", type=int, default=6)
     p.add_argument("--lr", type=float, default=2e-4)
     p.add_argument("--proj-dim", type=int, default=256)

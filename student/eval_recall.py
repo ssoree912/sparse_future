@@ -8,6 +8,8 @@ reported alongside, so the numbers have a floor to be read against.
 import argparse, glob, random, sys, torch
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 def recall_grid(pred, target, ratios=(0.05, 0.1, 0.2, 0.3, 0.5)):
     out = []
@@ -22,9 +24,9 @@ def recall_grid(pred, target, ratios=(0.05, 0.1, 0.2, 0.3, 0.5)):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", default="/workspace/dllm/model/LLaDA-8B-Instruct")
-    p.add_argument("--student", default="/workspace/dllm/dLLM_f/results/budget/"
-                                        "student/samsum/checkpoint-best")
-    p.add_argument("--root", default="/workspace/dllm/dLLM_f/results/budget")
+    p.add_argument("--student",
+                   default=str(REPO_ROOT / "results/student/samsum/checkpoint-best"))
+    p.add_argument("--root", default=str(REPO_ROOT / "results"))
     p.add_argument("--datasets", default="samsum,gsm8k,mmlu,mbpp")
     p.add_argument("--shards", type=int, default=25)
     p.add_argument("--question-window", type=int, default=128)

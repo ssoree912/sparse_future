@@ -35,10 +35,8 @@ def parse_args():
     p.add_argument("--model", default="/workspace/dllm/model/LLaDA-8B-Instruct")
     p.add_argument("--dataset", required=True,
                    help="prompt shard directory name, e.g. samsum / gsm8k / mmlu")
-    p.add_argument("--shard-root",
-                   default="/workspace/dllm/dLLM_f/results/budget/prompt_shards")
-    p.add_argument("--output-root",
-                   default="/workspace/dllm/dLLM_f/results/budget/teacher")
+    p.add_argument("--shard-root", default=str(REPO_ROOT / "results" / "prompt_shards"))
+    p.add_argument("--output-root", default=str(REPO_ROOT / "results" / "teacher"))
     p.add_argument("--n-samples", type=int, default=300)
     p.add_argument("--gen-length", type=int, default=128)
     p.add_argument("--block-length", type=int, default=32)
