@@ -9,13 +9,14 @@ Model: `GSAI-ML/LLaDA-8B-Instruct`
 ```bash
 conda env create -f environment.yml
 conda activate dllm
-
-ln -sf $(pwd)/eval/LLaDA_future.py ../dLLM_f/eval_model/LLaDA_future.py
-echo "from .LLaDA_future import LLaDAFuture" >> ../dLLM_f/eval_model/__init__.py
 ```
 
-Commands run from the repo root. The model is expected at `../model/LLaDA-8B-Instruct` and the
-lm-eval harness at `../dLLM_f/`; override with `FUTURE_DLLM_MODEL` and `FUTURE_DLLM_HARNESS`.
+Commands run from the repo root. Two paths are expected beside the repo and can be overridden:
+
+| | default | override |
+|---|---|---|
+| model | `../model/LLaDA-8B-Instruct` | `FUTURE_DLLM_MODEL`, or `--model` |
+| LongBench parquets | `../data/eval/longbench` | `LONGBENCH_DATA` |
 
 ## Datasets
 
@@ -29,8 +30,8 @@ lm-eval harness at `../dLLM_f/`; override with `FUTURE_DLLM_MODEL` and `FUTURE_D
 | `mbpp_full` | mbpp full train | 256 | `mbpp` |
 | `samsum_lb` / `trec_lb` / `wiki2_lb` | LongBench format, ~2048-token prompts | 128 / 96 / 64 | `longbench_*` |
 
-Generation length must match what the eval task runs. Add a dataset with a builder in
-`teacher/build_prompt_shards.py`.
+`--gen-length` should match the task's `max_gen_toks`, since it decides how much of the cache is
+prompt rather than model output. Add a dataset with a builder in `teacher/build_prompt_shards.py`.
 
 ## Teacher labels
 
@@ -61,7 +62,9 @@ scripts/run_eval.sh gsm8k  1.0        # no eviction, no checkpoint
 ```
 
 → `results/<dataset>_keep<ratio>_<timestamp>.json`. `keep_ratio` under 1.0 needs a checkpoint.
-`LIMIT` sets the number of items (default 200).
+`LIMIT` sets the number of items (default 200). Generation length, stop strings and shot count come
+from the lm-eval task definition; LongBench tasks are in `eval/tasks/longbench/`, the rest are
+lm-eval's own.
 
 Recall against held-out labels, no generation:
 

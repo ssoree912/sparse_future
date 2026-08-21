@@ -9,13 +9,14 @@
 ```bash
 conda env create -f environment.yml
 conda activate dllm
-
-ln -sf $(pwd)/eval/LLaDA_future.py ../dLLM_f/eval_model/LLaDA_future.py
-echo "from .LLaDA_future import LLaDAFuture" >> ../dLLM_f/eval_model/__init__.py
 ```
 
-명령어는 저장소 루트에서 실행한다. 모델은 `../model/LLaDA-8B-Instruct`, lm-eval 하네스는
-`../dLLM_f/`에 있다고 가정하며 `FUTURE_DLLM_MODEL`, `FUTURE_DLLM_HARNESS`로 바꿀 수 있다.
+명령어는 저장소 루트에서 실행한다. 저장소 밖에 있다고 가정하는 경로는 둘이고, 둘 다 바꿀 수 있다:
+
+| | 기본값 | 변경 |
+|---|---|---|
+| 모델 | `../model/LLaDA-8B-Instruct` | `FUTURE_DLLM_MODEL` 또는 `--model` |
+| LongBench parquet | `../data/eval/longbench` | `LONGBENCH_DATA` |
 
 ## 데이터셋
 
@@ -29,8 +30,8 @@ echo "from .LLaDA_future import LLaDAFuture" >> ../dLLM_f/eval_model/__init__.py
 | `mbpp_full` | mbpp full train | 256 | `mbpp` |
 | `samsum_lb` / `trec_lb` / `wiki2_lb` | LongBench 형식, ~2048토큰 | 128 / 96 / 64 | `longbench_*` |
 
-생성 길이는 평가 task가 쓰는 값과 같아야 한다. 데이터셋 추가는
-`teacher/build_prompt_shards.py`에 builder를 쓴다.
+`--gen-length`는 task의 `max_gen_toks`와 맞춰야 한다. 이 값이 캐시에서 프롬프트와 모델 출력의
+비율을 결정하기 때문이다. 데이터셋 추가는 `teacher/build_prompt_shards.py`에 builder를 쓴다.
 
 ## 교사 라벨
 
@@ -61,7 +62,8 @@ scripts/run_eval.sh gsm8k  1.0        # 축출 없음, 체크포인트 불필요
 ```
 
 → `results/<데이터셋>_keep<비율>_<날짜시간>.json`. `keep_ratio`가 1.0 미만이면 체크포인트가
-필수. 문항 수는 `LIMIT` (기본 200).
+필수. 문항 수는 `LIMIT` (기본 200). 생성 길이·정지 문자열·shot 수는 lm-eval task 정의에서
+그대로 가져온다. LongBench task는 `eval/tasks/longbench/`에 있고 나머지는 lm-eval 기본이다.
 
 생성 없이 held-out 라벨로 확인:
 
