@@ -55,7 +55,7 @@ echo "from .LLaDA_future import LLaDAFuture" >> $HARNESS/eval_model/__init__.py
 
 ## Running it
 
-Three steps. Everything else is fixed: block length 32, pool kernel 3, greedy decoding, one selection per block.
+Three steps. Everything else is fixed: block length 32, greedy decoding, one selection per block.
 
 **1. Prompts → teacher labels.** Prompt shards come from non-test splits only, so the teacher never sees an evaluation item.
 

@@ -63,7 +63,7 @@ def collect(model, prompt_ids, args):
     records = []
 
     for block in range(n_blocks):
-        cache = CustomCache(n_layers=L, device=device, kernel_size=3, keep_ratio=1.0)
+        cache = CustomCache(n_layers=L, device=device, keep_ratio=1.0)
         cache.collect_pool = True             # keep the whole pool, in candidate order
         bs, be = P + block * B, P + (block + 1) * B
         ntt = get_num_transfer_tokens(x[:, bs:be] == MASK_ID, S)
@@ -120,7 +120,7 @@ def main():
     from future_dllm import LLaDAModelLM
 
     cfg = AutoConfig.from_pretrained(args.model, trust_remote_code=True)
-    cfg.block_len, cfg.kernel_size, cfg.keep_ratio = args.block_length, 3, 1.0
+    cfg.block_len, cfg.keep_ratio = args.block_length, 1.0
     model = LLaDAModelLM.from_pretrained(args.model, config=cfg, device_map="auto",
                                          torch_dtype=torch.bfloat16,
                                          trust_remote_code=True).eval()

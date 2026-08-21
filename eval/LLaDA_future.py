@@ -36,7 +36,6 @@ class LLaDAFuture(LLaDA):
         self,
         pretrained: str,
         keep_ratio: float = 1.0,
-        kernel_size: int = 3,
         block_len: int = 32,
         student_path: str = "",
         question_window: int = 128,
@@ -53,7 +52,6 @@ class LLaDAFuture(LLaDA):
 
         config = AutoConfig.from_pretrained(str(pretrained), trust_remote_code=True)
         config.block_len = int(block_len)
-        config.kernel_size = int(kernel_size)
         config.keep_ratio = float(keep_ratio)
         torch_dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16,
                        "float32": torch.float32}.get(str(dtype), torch.bfloat16)

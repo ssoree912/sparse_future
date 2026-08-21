@@ -60,7 +60,7 @@ def main():
     from future_dllm import LLaDAModelLM, CustomCache
 
     cfg = AutoConfig.from_pretrained(args.model, trust_remote_code=True)
-    cfg.block_len, cfg.kernel_size, cfg.keep_ratio = 32, 3, 1.0
+    cfg.block_len, cfg.keep_ratio = 32, 1.0
     model = LLaDAModelLM.from_pretrained(args.model, config=cfg, device_map="auto",
                                          torch_dtype=torch.bfloat16,
                                          trust_remote_code=True).eval()
@@ -101,7 +101,7 @@ def main():
     @torch.no_grad()
     def features(record):
         x = record["x_at_block_start"].unsqueeze(0).to(device)
-        cache = CustomCache(n_layers=L, device=device, kernel_size=3, keep_ratio=1.0)
+        cache = CustomCache(n_layers=L, device=device, keep_ratio=1.0)
         cache.layer_hidden_states = {}
         model(x, int(record["block_start"]), 1, cache)
         return cache.layer_hidden_states

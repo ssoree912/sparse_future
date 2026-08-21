@@ -365,8 +365,7 @@ class ModelConfig():
     See :data:`TrainConfig.precision` instead.
     """
 
-    ## add kernel_size/keep_ratio
-    kernel_size: Optional[int] = 3
+    ## add keep_ratio
     keep_ratio: float = 0.5
 
     @property

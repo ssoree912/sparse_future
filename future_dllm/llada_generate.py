@@ -42,8 +42,8 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=32,
     """Generate ``gen_length`` tokens block by block.
 
     ``cache_scorer`` is a trained ``PromptUtilityStudent``; without one the model
-    only runs at ``keep_ratio=1.0`` (no eviction). ``keep_ratio``, ``block_len``
-    and ``kernel_size`` come from ``model.config``.
+    only runs at ``keep_ratio=1.0`` (no eviction). ``keep_ratio`` comes from
+    ``model.config``.
     """
     prompt_len = prompt.shape[1]
     x = torch.full((1, prompt_len + gen_length), mask_id, dtype=torch.long,
@@ -60,7 +60,7 @@ def generate(model, prompt, steps=128, gen_length=128, block_length=32,
         # made once against the block that will use it.
         cache = CustomCache(
             n_layers=model.config.n_layers, device=model.device,
-            kernel_size=model.config.kernel_size, keep_ratio=model.config.keep_ratio,
+            keep_ratio=model.config.keep_ratio,
             cache_scorer=cache_scorer, prompt_length=prompt_len,
             generation_length=gen_length, question_window=question_window)
 

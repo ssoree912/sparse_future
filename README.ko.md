@@ -55,7 +55,7 @@ echo "from .LLaDA_future import LLaDAFuture" >> $HARNESS/eval_model/__init__.py
 
 ## 실행
 
-세 단계다. 나머지는 고정이다 — block length 32, pool kernel 3, greedy 디코딩, 블록당 한 번 선택.
+세 단계다. 나머지는 고정이다 — block length 32, greedy 디코딩, 블록당 한 번 선택.
 
 **1. 프롬프트 → 교사 라벨.** 프롬프트 shard는 test가 아닌 split에서만 만든다. 교사가 평가 항목을 보는 일이 없다.
 

@@ -544,7 +544,6 @@ class CustomCache:
         self,
         n_layers: int,
         device: torch.device,
-        kernel_size: Optional[int] = None,
         keep_ratio: float = 1.0,
         cache_scorer=None,
         prompt_length: int = 0,
@@ -553,7 +552,6 @@ class CustomCache:
     ) -> None:
         self.cache = {}
         self.keep_ratios = [keep_ratio for _ in range(n_layers)]
-        self.pool_kernel_size = kernel_size
         self.cache_scorer = cache_scorer
         self.prompt_length = prompt_length
         self.generation_length = generation_length
