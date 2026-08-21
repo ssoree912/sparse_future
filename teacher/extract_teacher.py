@@ -1,17 +1,18 @@
 """Teacher labels from the finished answer: final x row-max.
 
-For each block the collector lets the block fill in with the full cache, then runs
-one extra forward on the completed block and reads what those answer tokens look
-at. The label is the per-candidate maximum over the 32 answer rows — a candidate
-survives if *any* finished token needed it strongly, which is what separates this
-from the sum-style labels that average such tokens away.
+For each block the extractor lets the block fill in with the full cache, then
+runs one extra forward on the completed block and reads what those answer tokens
+attend to. The label is the per-candidate maximum over the block's rows
 
-Measured as an oracle it scores 36.63 on SAMSum keep 0.1, above both the sum
-variant (34.72) and the training-free current-attention criterion (36.19).
+    I_j = max_r a_rj          a_rj = softmax_j (q_r . k_j / sqrt(d)), head-averaged
+
+so a candidate survives if *any* finished token needed it strongly. Taking the
+maximum rather than the sum is what makes the label usable: summing averages away
+the one token that depended on a given cache entry.
 
 Stored per (sample, block): the label [n_layers, n_candidates], the exact model
-input at the block's step-1 (so the student's features can be replayed without
-keeping hidden states), and the candidate index set.
+input at the block's step-1 so the scorer's features can be replayed at training
+time without keeping hidden states, and the candidate index set.
 """
 
 from __future__ import annotations
@@ -23,40 +24,38 @@ import time
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
 MASK_ID = 126336
 
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", default="/workspace/dllm/model/LLaDA-8B-Instruct")
-    p.add_argument("--source-glob",
-                   default="/tmp/claude-0/-workspace-dllm/4a27d45a-7287-4963-bd14-cbe2a09f4e0c/"
-                           "scratchpad/src_shards/*/samsum/*.pt")
-    p.add_argument("--output-root", default="/workspace/dllm/dLLM_f/results/budget/"
-                                            "teacher_final_rowmax_samsum300")
+    p.add_argument("--dataset", required=True,
+                   help="prompt shard directory name, e.g. samsum / gsm8k / mmlu")
+    p.add_argument("--shard-root",
+                   default="/workspace/dllm/dLLM_f/results/budget/prompt_shards")
+    p.add_argument("--output-root",
+                   default="/workspace/dllm/dLLM_f/results/budget/teacher")
     p.add_argument("--n-samples", type=int, default=300)
     p.add_argument("--gen-length", type=int, default=128)
     p.add_argument("--block-length", type=int, default=32)
-    p.add_argument("--steps", type=int, default=128)
     p.add_argument("--max-prompt-len", type=int, default=2048)
-    p.add_argument("--opencompass-root", default="/workspace/dllm/opencompass")
     return p.parse_args()
 
 
 @torch.no_grad()
 def collect(model, prompt_ids, args):
-    from opencompass.models.sparse_dllm.modeling_llada import CustomCache
-    from opencompass.models.sparse_dllm.llada_generate import (
-        add_gumbel_noise, get_num_transfer_tokens)
-    import torch.nn.functional as F
+    from future_dllm import CustomCache, add_gumbel_noise, get_num_transfer_tokens
 
     device = model.device
     prompt_ids = prompt_ids[: args.max_prompt_len].to(device).unsqueeze(0)
     P = prompt_ids.shape[1]
     G, B = args.gen_length, args.block_length
     n_blocks = G // B
-    S = args.steps // n_blocks
+    S = args.gen_length // n_blocks          # steps per block == block length
     L = model.config.n_layers
 
     x = torch.full((1, P + G), MASK_ID, dtype=torch.long, device=device)
@@ -65,7 +64,7 @@ def collect(model, prompt_ids, args):
 
     for block in range(n_blocks):
         cache = CustomCache(n_layers=L, device=device, kernel_size=3, keep_ratio=1.0)
-        cache.oracle_mode = "record"          # keep the whole pool, in candidate order
+        cache.collect_pool = True             # keep the whole pool, in candidate order
         bs, be = P + block * B, P + (block + 1) * B
         ntt = get_num_transfer_tokens(x[:, bs:be] == MASK_ID, S)
 
@@ -87,13 +86,12 @@ def collect(model, prompt_ids, args):
 
         step(0)
         step(1)
-        x_at_block_start = x.clone()
+        x_at_block_start = x.clone()          # the scorer's input at selection time
         for i in range(2, S):
             step(i)
 
-        # 완성된 블록에서 한 번 더 — 32행 전부 실제 토큰
+        # One more forward on the completed block: all rows are real tokens now.
         cache.capture_rows = True
-        cache.set_row_mask(None)
         step(S - 1)
         label = torch.stack([cache.pending_rows[l].max(dim=0).values for l in range(L)])
         cache.pending_rows.clear()
@@ -117,9 +115,9 @@ def collect(model, prompt_ids, args):
 
 def main():
     args = parse_args()
-    sys.path.insert(0, args.opencompass_root)
+    sys.path.insert(0, str(REPO_ROOT))
     from transformers import AutoConfig
-    from opencompass.models.sparse_dllm.modeling_llada import LLaDAModelLM
+    from future_dllm import LLaDAModelLM
 
     cfg = AutoConfig.from_pretrained(args.model, trust_remote_code=True)
     cfg.block_len, cfg.kernel_size, cfg.keep_ratio = args.block_length, 3, 1.0
@@ -127,24 +125,28 @@ def main():
                                          torch_dtype=torch.bfloat16,
                                          trust_remote_code=True).eval()
 
-    out = Path(args.output_root)
+    out = Path(args.output_root) / args.dataset
     out.mkdir(parents=True, exist_ok=True)
-    shards = sorted(glob.glob(args.source_glob))[: args.n_samples]
+    shards = sorted(glob.glob(f"{args.shard_root}/{args.dataset}/*.pt"))[: args.n_samples]
+    if not shards:
+        raise SystemExit(f"no prompt shards under {args.shard_root}/{args.dataset} "
+                         f"- run teacher/build_prompt_shards.py first")
     started = time.time()
     for i, path in enumerate(shards):
         target = out / Path(path).name
-        if target.exists():
+        if target.exists():                   # resume: shards already done are skipped
             continue
         src = torch.load(path, map_location="cpu", weights_only=False)
         records = collect(model, src["prompt_input_ids"].to(torch.long), args)
         torch.save({"sample_id": src.get("sample_id"),
+                    "dataset": args.dataset,
                     "prompt_input_ids": src["prompt_input_ids"].to(torch.long),
                     "teacher_kind": "final_rowmax",
                     "blocks": records}, target)
         if (i + 1) % 10 == 0:
             print(f"{i + 1}/{len(shards)}  {(time.time() - started) / (i + 1):.1f}s/sample",
                   flush=True)
-    print(f"done: {len(list(out.glob('*.pt')))} shards", flush=True)
+    print(f"done: {len(list(out.glob('*.pt')))} shards -> {out}", flush=True)
     return 0
 
 

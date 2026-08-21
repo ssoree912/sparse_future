@@ -1,303 +1,121 @@
-# sparse_future — 실행 안내
+# future_dllm
 
-채점 기준과 재선택을 수식으로 정리한 문서는 [METHOD.ko.md](METHOD.ko.md)에 있습니다.
+디퓨전 LLM의 KV 캐시 축출을, 지금 블록이 보고 있는 것이 아니라 **완성된 답변이 필요로 할 것**을 기준으로 결정한다.
 
-LLaDA-8B-Instruct 위에서 [Sparse-dLLM](https://github.com/OpenMOSS/Sparse-dLLM)의 KV 캐시
-eviction을 다시 살펴본 실험 모음입니다. 핵심 질문은 하나입니다 — **캐시를 10%로 줄였을 때
-잃은 성능을, 토큰을 더 잘 고르는 것으로 얼마나 되찾을 수 있는가.**
+디퓨전 LLM은 한 블록을 여러 디노이징 스텝에 걸쳐 만든다. Sparse-dLLM은 블록마다 한 번 캐시를 잘라내는데, 그 순위를 **자르는 시점의 어텐션**으로 매긴다 — 블록의 모든 토큰이 아직 `[MASK]`인 시점이다. 블록이 무슨 말을 할지 정해지기 전에 무엇을 남길지 정하는 셈이다.
 
-결론부터 말하면 **더 잘 고르는 것보다 다시 고르는 것이 훨씬 큽니다.** 그리고 다시 고르려면
-버린 토큰을 되살릴 수 있어야 하므로 메모리를 내주게 되는데, 그 메모리는 **K만 남기고
-양자화하면 대부분 회수됩니다.**
+`future_dllm`은 완성된 답변이 매겼을 순위를 학습한다. 교사 패스가 전체 캐시로 블록을 끝까지 채우고, 완성된 블록에 forward를 한 번 더 돌려 그 답변 토큰들이 실제로 무엇을 봤는지 기록한다. 작은 scorer가 이것을 자르는 시점에 얻을 수 있는 상태로부터 예측하도록 학습되고, 배포 시에는 블록당 한 번의 선택만 한다 — 추가 forward도, 추가 메모리도 없다.
 
-## 핵심 결과
+## 라벨
 
-SAMSum (LongBench, 2048 컨텍스트, 200샘플, ROUGE-L):
+블록의 행 `r`(완성된 답변 토큰)과 캐시 후보 `j`에 대해:
 
-| 구성 | 점수 | GPU 캐시 | 학습 |
+```
+a_rj = softmax_j ( q_r · k_j / sqrt(d) )          헤드 평균 어텐션
+I_j  = max_r a_rj                                  후보별 중요도
+```
+
+합이 아니라 **최댓값**이다. 어떤 완성된 토큰 **하나라도** 그 캐시 항목에 강하게 의존했다면 남겨야 하는데, 합을 쓰면 그 토큰이 신경 쓰지 않은 나머지 31개에 묻힌다. SAMSum keep 0.1에서 합 형태는 34.72, 최댓값 형태는 36.63이다. 그래서 이 저장소에는 최댓값 형태만 남아 있다.
+
+scorer는 레이어별로 `I_j` 순위를 맞추도록 학습한다. 정규화된 라벨에 대한 listwise KL과 pairwise 순서 항을 함께 쓰고, 체크포인트는 k ∈ {5, 10, 20, 30, 50}% 평균 recall로 고른다 — 고정된 예산이 아니라 scorer를 얻기 위해서다.
+
+## 결과
+
+`LLaDA-8B-Instruct`, keep ratio 0.1, block length 32. 두 행의 예산이 같은 것을 직접 계측했다 — 블록당 95/100/96개로 동일하고, 다른 것은 고르는 기준뿐이다.
+
+| | SAMSum ROUGE-L | GSM8K flex | GSM8K strict |
 |---|---|---|---|
-| eviction 없음 (`keep=1.0`) | 40.02 | 1,124 MB | — |
-| **baseline** (원본 Sparse-dLLM, keep 0.1) | **33.89** | **112 MB** | — |
-| **우리 기준만** (재선택 없음) | **36.19** | **112 MB** | 불필요 |
-| **학습된 student** (`final × 행 max` 라벨) | **36.24** | **112 MB** | 필요 |
-| (참고) 오라클 `final × 행 max` — student의 상한 | 36.63 | 112 MB | — |
-| 우리 기준 + 재선택 8스텝 | 35.85 | 1,236 MB |
-| + V 오프로딩 | 35.85 | 674 MB |
-| **+ int4 K 양자화** | **36.48** | **257 MB** |
+| 축출 없음 (keep 1.0) | 40.02 | 0.765 | 0.480 |
+| Sparse-dLLM 베이스라인 | 33.89 | 0.455 | 0.140 |
+| **future_dllm** | **35.86** | **0.745** | **0.470** |
 
-MATH-500 (100문제, 생성 256토큰, 정확도 — **math_verify 표준 채점**):
+GSM8K는 축출로 잃은 것의 93%를 되찾고, SAMSum은 32%다. 이 차이는 캐시에 무엇이 들어 있는지를 따라간다 — 수학 블록의 캐시는 모델 자신의 추론 사슬이라 중간 결과 하나를 잃으면 그 뒤가 전부 무너지지만, 요약 블록의 캐시는 입력 텍스트라 어떤 순위를 써도 10%로는 복원되지 않는다.
 
-| keep_ratio | baseline | 우리 기준만 | 재선택+int4 |
-|---|---|---|---|
-| 1.0 | 32 | — | — |
-| 0.5 | 31 | — | — |
-| 0.3 | 8 | — | — |
-| **0.25** | **6** | **11** | **18** |
-| 0.1 | 2 | — | — |
+하나의 scorer가 네 도메인을 모두 덮는다. 요약만으로 학습하면 도메인 안에서 recall 0.752, 밖에서 0.625~0.692다. 혼합으로 학습하면 도메인 안 0.752를 유지하면서 밖에서 0.760~0.771이 된다. 약점은 표현력이 아니라 데이터 부족이었다.
 
-> 자체 채점기로는 각각 27 / 27 / 7 / 3·8·14 / 1이었습니다. `\frac{1}{2}` vs `0.5` 같은
-> 동치 표현을 놓쳐 **일괄적으로 짜게** 나왔고, 특히 답변 기반 라벨이 +5~6씩 손해를 봤습니다.
-> MATH 수치는 반드시 `scripts/rescore_math.py`로 재채점해서 쓰세요.
-
-**집계 방식이 라벨 종류보다 중요합니다.** 미래 라벨이 계속 지던 것은 미래 정보가 나빠서가
-아니라 스텝/행 축을 `sum`으로 합쳤기 때문이었습니다. 소수의 행이나 한 스텝에서만 결정적으로
-필요했던 후보가 총합에 묻힙니다 (SAMSum keep 0.1):
-
-| 라벨 | `sum` | `max` | `freq` |
-|---|---|---|---|
-| 미래, 마스크 행 (스텝 축) | 34.60 | **36.20** | — |
-| 미래, 확정 토큰 (스텝 축) | 35.27 | **36.05** | 25.19 |
-| **미래, 완성된 답변 (행 축)** | 34.72 | **36.63** | — |
-
-`final × 행 max`가 전체 최고이자 **현재 기반(36.19)을 넘는 유일한 라벨**이고, forward 한 번이면
-얻어지므로 teacher 추출 비용도 가장 쌉니다. `freq`는 점수 크기를 버리고 순위만 세어서 붕괴합니다.
-
-라벨 정의 비교 (SAMSum keep 0.1, 200샘플 / MATH keep 0.25, 100샘플):
-
-| 선택 근거 | SAMSum | MATH | 배포 가능 |
-|---|---|---|---|
-| baseline (원본 기준) | 33.89 | 6 | ✅ |
-| `answer` (확정 직후 1회) | 34.24 | 9 | ❌ 오라클 |
-| `final` (완성된 답변 1회) | 34.72 | 8 | ❌ 오라클 |
-| `confirmed` (확정 행 매 스텝) | 35.27 | 7 | ❌ 오라클 |
-| **`ours` (마스크 행)** | **36.19** | **11** | **✅** |
-
-미래를 아는 오라클들이 현재만 보는 방법을 못 이깁니다. 예산은 여섯 모드 모두 레이어당
-정확히 `int(후보수 × keep_ratio)`개로 **실측 확인**했습니다 (`scripts/check_budget.py`).
-
-## 무엇이 eviction이고 무엇이 아닌가
-
-**채점 기준 변경은 eviction이 맞고, 메모리를 전혀 더 쓰지 않습니다.** 두 기준 모두 스텝 1,
-즉 전체 forward가 모든 위치의 K를 막 만들어낸 시점에 돌아갑니다. baseline도 그 K를 손에
-쥐고 있고, 둘 다 고른 직후 나머지를 버립니다. 같은 112 MB, 같은 한 번의 결정, 보관 없음,
-학습 없음인데 **33.89 → 36.19**입니다.
-
-**재선택은 eviction이 아닙니다.** 버린 항목을 되살리려면 그게 남아 있어야 하므로 풀을
-보관하게 됩니다(압축·오프로딩하더라도). baseline 대비 GPU 캐시 2.3배에 호스트 메모리와
-PCIe 전송이 추가되고, eviction을 안 한 경우 대비로만 4.4배 작습니다. 캐시 eviction이라기보다
-**상주 색인을 둔 paged sparse attention**이라고 부르는 게 정확합니다. SAMSum에서는 기준
-변경 위에 +0.29만 더합니다.
-
-## 두 가지 scorer
-
-`CustomCache`가 두 채점 기준을 **나란히** 들고 있고, `scorer` 값으로 고릅니다.
-**기본값은 원본**이므로 명시하지 않으면 우리 방법이 켜지지 않습니다.
-
-| `scorer=` | 순위 계산 |
-|---|---|
-| `'sparse_dllm'` (기본) | 블록의 쿼리 32개를 **평균**해서 벡터 하나로 만든 뒤 K와 원시 내적 → 헤드 평균 → max-pool |
-| `'masked_row'` (우리) | 쿼리 **행별로** 점수 계산 → **softmax** → 헤드 평균 → **아직 [MASK]인 행만 합산** → max-pool |
-
-세 번째 차이가 결정적입니다. 블록 중간에는 32개 행 중 상당수가 이미 확정되어 캐시가 더
-필요 없는데, 쿼리를 평균내면 그 확정된 토큰들이 순위를 지배합니다. 같은 재선택 주기에서
-원본 공식을 쓰면 **33.65**로 재선택을 안 한 것(33.89)보다 나쁘고, `masked_row`를 쓰면
-**35.85**가 됩니다.
-
-`scorer`와 `reselect_every`는 **독립**입니다. 기준만 바꾼 경우와 주기까지 바꾼 경우를
-따로 볼 수 있습니다.
-
-## 설정 인자
-
-| 인자 | 뜻 |
-|---|---|
-| `keep_ratio` | 후보 중 남길 비율 (0.1 = 10%) |
-| `scorer` | `'sparse_dllm'` 또는 `'masked_row'` |
-| `reselect_every=R` | 스텝 1의 K/V를 보관해두고 R스텝마다 다시 순위를 매김. **재계산은 없음**, 남길 창만 이동 |
-| `reselect_offload_v=True` | V를 CPU에 두고 선택된 것만 GPU로 전송. **출력이 완전히 동일** (5/5 검증) |
-| `reselect_k_bits=8` 또는 `4` | 보관하는 K를 양자화. K는 순위만 정하므로 손실이 없음 (int4가 오히려 더 높음) |
-| `oracle_eviction=True` | 연구용. 블록의 남은 스텝 어텐션을 미리 보고 고름 (배포 불가) |
-
-## 설치
+## 환경
 
 ```bash
-# 1) 모델 코드 교체
-cp sparse_dllm/*.py <opencompass>/opencompass/models/sparse_dllm/
-
-# 2) 설정 배치
-cp configs/sparse_llada_*.py            <opencompass>/myeval/models/
-cp configs/longbench_passage_*.py       <opencompass>/myeval/datasets/
-
-# 3) site-packages에 별도 설치본이 있으면 거기에도 복사 (아래 주의사항 참고)
-python -c "import opencompass, os; print(os.path.dirname(opencompass.__file__))"
-cp sparse_dllm/*.py <위에서 나온 경로>/models/sparse_dllm/
+conda activate dllm          # torch 2.5.1+cu124, transformers 4.46.3, lm-eval 0.4.12
 ```
 
-## 실행 명령어
+모델: `LLaDA-8B-Instruct`, 경로 `/workspace/dllm/model/LLaDA-8B-Instruct`. GPU 1장, batch size 1 — 캐시 상태가 시퀀스마다 다르기 때문이다.
 
-### SAMSum (LongBench)
+lm-eval 모델은 한 번만 설치한다. 패키지는 이 저장소에 그대로 두므로 관리할 사본이 하나뿐이다:
 
 ```bash
-cd <opencompass>
-export CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2
-export HF_HOME=<hf_cache> HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-
-# baseline (원본 Sparse-dLLM, keep 0.1)
-python run.py --config-dir myeval --models sparse_llada_longbench_keep01 \
-  --datasets longbench_samsum_gen --work-dir outputs/samsum_baseline --max-workers-per-gpu 1
-
-# 우리 기준만 (재선택 없음) — 기준의 효과만 분리
-python run.py --config-dir myeval --models sparse_llada_ours_oneshot_keep01 \
-  --datasets longbench_samsum_gen --work-dir outputs/samsum_ours --max-workers-per-gpu 1
-
-# 우리 기준 + 재선택 8스텝
-python run.py --config-dir myeval --models sparse_llada_reselect8_keep01 \
-  --datasets longbench_samsum_gen --work-dir outputs/samsum_reselect8 --max-workers-per-gpu 1
-
-# 권장 구성: 우리 기준 + 재선택 + V 오프로딩 + int4 K
-python run.py --config-dir myeval --models sparse_llada_reselect8_int4k \
-  --datasets longbench_samsum_gen --work-dir outputs/samsum_int4k --max-workers-per-gpu 1
-
-# eviction 없음 (천장)
-python run.py --config-dir myeval --models sparse_llada_keep10 \
-  --datasets longbench_samsum_gen --work-dir outputs/samsum_keep10 --max-workers-per-gpu 1
+HARNESS=/workspace/dllm/dLLM_f
+ln -sf $(pwd)/eval/LLaDA_future.py $HARNESS/eval_model/LLaDA_future.py
+echo "from .LLaDA_future import LLaDAFuture" >> $HARNESS/eval_model/__init__.py
 ```
 
-점수는 `<work-dir>/<타임스탬프>/results/<abbr>/LongBench_samsum.json`에 나옵니다.
+## 실행
 
-### passage_retrieval (4096 컨텍스트)
+세 단계다. 나머지는 고정이다 — block length 32, pool kernel 3, greedy 디코딩, 블록당 한 번 선택.
+
+**1. 프롬프트 → 교사 라벨.** 프롬프트 shard는 test가 아닌 split에서만 만든다. 교사가 평가 항목을 보는 일이 없다.
 
 ```bash
-python run.py --config-dir myeval --models sparse_llada_reselect8_int4k \
-  --datasets longbench_passage_retrieval_short_gen \
-  --work-dir outputs/pr_int4k --max-workers-per-gpu 1
+python teacher/build_prompt_shards.py --dataset samsum --limit 300
+python teacher/extract_teacher.py --dataset samsum --n-samples 300 --gen-length 128
 ```
 
-`longbench_passage_retrieval_short_gen`은 LLaDA의 4096 한계 안에 온전히 들어가는 78개만
-추린 것입니다. 원본은 컨텍스트 중앙값이 9,255토큰이라 정답 문단이 잘려나가서, eviction
-때문에 틀린 것인지 잘림 때문인지 구분되지 않습니다.
-
-### MATH-500
-
-OpenCompass를 거치지 않는 전용 러너입니다. 모델을 한 번만 올리고 여러 구성을 순차 실행합니다.
+**2. scorer 학습.** 교사 루트를 쉼표로 여러 개 주면 도메인 혼합 학습이 된다. val은 도메인별로 나누고 체크포인트는 도메인 macro 평균으로 고른다.
 
 ```bash
-cd <repo-root>
-CUDA_VISIBLE_DEVICES=2 python scripts/run_math500_sparse.py \
-  --n-samples 100 \
-  --variants keep1.0 keep0.25 keep0.25-reselect8-int4k
+python student/train_student.py \
+  --teacher-root results/budget/teacher/samsum \
+  --output-dir  results/budget/student/samsum
 ```
 
-변형 이름은 문자열로 조합합니다: `keep<비율>`, `-reselect<주기>`, `-int<비트>k`,
-`-offloadv`, `-oracle`, `-oracle-perstep-every<주기>`. 결과는
-`results/math500/<변형>.json`에 정확도·소요시간·peak 메모리와 함께 저장됩니다.
-
-### lm-eval (공식 하네스)
-
-MATH·GSM8K는 OpenCompass가 아니라 **lm-evaluation-harness**가 표준입니다. `dLLM_f`의
-lm-eval 경로에 Sparse-dLLM eviction을 붙인 래퍼가 `eval_model/LLaDA_sparse.py`이고,
-모델 코드는 OpenCompass 의존성 없이 쓰도록 `dLLM_f/sparse_dllm/`에 독립 복사해 둡니다.
+**3. 평가.** 공식 하네스는 lm-eval 하나다.
 
 ```bash
-cd <dLLM_f>
-export CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2
-export HF_HOME=<hf_cache> HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-
-python evaluation_script.py \
-  --model LLaDA_sparse --tasks minerva_math --batch_size 1 --limit 200 \
-  --model_args "pretrained=<model>,keep_ratio=0.25,scorer=masked_row,block_len=32" \
-  --gen_kwargs "block_length=32,gen_length=256,steps=256,cfg_scale=0.0" \
-  --num_fewshot 0 --apply_chat_template --fewshot_as_multiturn
+cd $HARNESS
+python evaluation_script.py --model LLaDA_future \
+  --model_args "pretrained=$MODEL,keep_ratio=0.1,student_path=$CKPT" \
+  --tasks gsm8k --num_fewshot 5 --limit 200 --batch_size 1 \
+  --gen_kwargs "block_length=32,gen_length=256,steps=256,temperature=0.0"
 ```
 
-`scorer=sparse_dllm`이면 baseline입니다. `--model_args`로 `reselect_every`,
-`reselect_k_bits`, `oracle_*`도 전부 넘길 수 있고, 로딩 시 `[LLaDA_sparse] ...` 로그로
-실제 전달된 값이 찍힙니다.
-
-주의: dLLM_f의 기존 `.sh`는 `-m lm_eval` 인자를 붙이는데 lm_eval 0.4.12에서는
-`unrecognized arguments` 오류가 납니다 — 빼고 실행하세요. 그리고 그 스크립트들은
-`block_length=256`(블록 1개)이라 우리 방법의 전제와 다릅니다. **`block_length=32`로
-맞춰야** 지금까지의 실험과 비교됩니다.
-
-### teacher 추출 → student 학습 → 평가
-
-미래 기반 scorer를 만드는 전체 경로입니다. 라벨은 `final × 행 max` —
-**full 캐시로 블록을 끝까지 채운 뒤 완성된 상태에서 forward 한 번**을 돌리고,
-그 32개 답변 토큰이 각 후보에 준 어텐션의 **행 축 최댓값**을 씁니다.
-
-$$I_j \;=\; \max_{r=0..31}\ \bar a_{r,j}(\text{블록 완성 시점})$$
+생성 평가를 돌리기 전에 held-out 라벨로 scorer를 값싸게 확인할 수 있다:
 
 ```bash
-cd <dLLM_f>
-export CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2
-export HF_HOME=<hf_cache> TRANSFORMERS_OFFLINE=1
-
-# 1) teacher 추출 — samsum 300, 샘플당 약 6초
-python -m dllm_cache.budget.extract_final_rowmax_teacher --n-samples 300 \
-  --source-glob "<prompt shards>/samsum/*.pt" \
-  --output-root results/budget/teacher_final_rowmax_samsum300
-
-# 2) student 학습 — 6에폭, 약 40분
-python -m dllm_cache.budget.train_final_rowmax_student \
-  --teacher-root results/budget/teacher_final_rowmax_samsum300 \
-  --output-dir  results/budget/student_final_rowmax_samsum300
-
-# 3) 평가 — 학습된 scorer로 블록당 1회 선택 (보관 없음, baseline과 같은 메모리)
-cd <opencompass>
-python run.py --config-dir myeval --models sparse_llada_student_final_rowmax \
-  --datasets longbench_samsum_gen --work-dir outputs/samsum_student --max-workers-per-gpu 1
+python student/eval_recall.py --student results/budget/student/samsum/checkpoint-best
 ```
 
-세 단계를 한 번에 돌리려면 `scripts/run_final_rowmax_pipeline.sh`를 tmux에서 실행하세요.
-각 단계에 이어받기와 재시도가 들어 있어 중간에 CUDA 오류가 나도 진행분을 잃지 않습니다.
+## 옵션
 
-```bash
-tmux new-session -d -s pipe '<repo>/scripts/run_final_rowmax_pipeline.sh'
-tail -f <dLLM_f>/results/budget/pipeline.log
+바꾸도록 만들어둔 것은 두 개다.
+
+| 옵션 | 위치 | 의미 |
+|---|---|---|
+| `keep_ratio` | `--model_args` | 블록마다 남기는 캐시 후보의 비율. `1.0`이면 축출을 끄고 scorer가 필요 없다. `1.0` 미만이면 `student_path`가 필수다 |
+| `--dataset` | `build_prompt_shards.py`, `extract_teacher.py` | 어떤 프롬프트 소스로 라벨을 만들지 |
+
+생성 길이는 사용자 옵션이 아니라 데이터셋에 딸린 값이다. 평가가 쓰는 값과 같아야 하는데, 이 값이 캐시에서 프롬프트와 모델 출력의 비율을 결정하기 때문이다:
+
+| dataset | 프롬프트 | `--gen-length` | 평가 task | 평가 `gen_length` |
+|---|---|---|---|---|
+| `samsum` | 대화 | 128 | `longbench_samsum` | 128 |
+| `gsm8k` | train split | 128 | `gsm8k` (5-shot) | 256 |
+| `mmlu` | validation + dev | 64 | `mmlu_generative` | 64 |
+| `mbpp` | validation + prompt | 128 | `mbpp` | 256 |
+| `math` | `hendrycks_math` train | 256 | `minerva_math` | 256 |
+
+`samsum_lb`, `trec_lb`, `wiki2_lb`는 LongBench 형식의 긴 프롬프트(~2048 토큰)를 만든다. 위 결과에는 쓰이지 않았다.
+
+## 구성
+
+```
+future_dllm/     모델: CustomCache(축출), generate(블록 단위 디코딩), scorer 모듈
+teacher/         프롬프트 shard와 final × row-max 라벨 추출기
+student/         scorer 학습, held-out 라벨 recall 확인
+eval/            lm-eval 모델, LLaDA_future로 등록
 ```
 
-**추출이 저장하는 것** (블록당): 라벨 `[32 레이어, 후보수]` fp16, `x_at_block_start`,
-`candidate_indices`(프롬프트+suffix). 은닉 상태는 블록당 570 MB라 저장하지 않고,
-학습 때 `x_at_block_start`로 **배포와 같은 forward를 재현**해서 얻습니다 — 기존 student가
-프롬프트 전용 forward로 학습해 배포와 어긋났던 지점입니다. 300샘플 × 4블록 ≈ 165 MB.
+## 메모
 
-**학습**: 레이어별 헤드(`PromptUtilityStudent`, 레거시와 같은 형식이라 추론 경로가 그대로 읽음),
-손실은 정규화된 라벨에 대한 listwise KL + 전 구간 pairwise, 체크포인트는 단일 k가 아니라
-**k-grid(0.05~0.5) 평균 recall**로 선택합니다.
-
-**배포**: `student_cache_path`로 체크포인트를 주고 `student_evict_suffix=True`로 두면
-라벨과 같은 후보 집합(프롬프트+suffix)에서 블록당 1회 선택합니다. 보관도 재선택도 없어서
-**baseline과 동일한 메모리 조건**입니다.
-
-**결과** (samsum 300으로 학습, 평가 200샘플): val recall@k-grid **0.7524**,
-SAMSum **36.24** — baseline 대비 +2.35이고 오라클 상한(36.63)까지 0.39를 남깁니다.
-라벨 상위 k의 75%만 맞혀도 성능은 거의 다 나오므로, 놓치는 25%는 대체로 경계 근처의
-덜 중요한 후보입니다. 다만 학습 없는 기준(36.19)과는 0.05 차이로, 같은 설정의 재현
-편차(0.3~0.6) 안쪽이라 **이겼다고 말할 수 없습니다.** 상한 자체가 36.63이라 학습으로
-확보 가능한 여유가 애초에 0.44뿐입니다. 추론 속도는 5.09초/샘플로 오히려 우리 기준(5.5초)
-보다 빠릅니다 — MLP 한 번이 행별 softmax보다 싸기 때문입니다.
-
-### 메모리 측정
-
-```bash
-CUDA_VISIBLE_DEVICES=2 python scripts/bench_cache_memory.py --task samsum --n-samples 5
-CUDA_VISIBLE_DEVICES=2 python scripts/bench_cache_memory.py --task passage_retrieval --n-samples 5
-```
-
-구성별로 **캐시가 실제로 점유한 GPU 바이트**, 전체 peak, 샘플당 시간, 그리고 첫 번째
-구성 대비 출력이 같은지를 출력합니다. `--variants`로 비교 대상을 고를 수 있습니다.
-
-## 주의사항
-
-**site-packages 문제 (가장 중요).** 환경에 `opencompass`가 editable이 아닌 형태로 설치돼
-있으면, OpenCompass가 띄우는 **추론 서브프로세스가 그 설치본을 import**합니다. 작업
-트리만 고치면 새 인자가 조용히 무시되고 로그에 `WARNING - Unused argument <이름>=True`
-한 줄만 남은 채 **예전 코드가 그대로 돌아갑니다.** 이 세션에서 이것 때문에 200샘플 실행
-하나가 통째로 헛돌았습니다. 코드 변경이 실제로 적용됐는지는 점수가 아니라 **로그의 디버그
-출력이나 예측 변화**로 확인하세요 — 스모크 점수는 예전 경로와 우연히 같을 수 있습니다.
-
-**간헐적 segfault.** student/oracle 경로에서 `libcuda.so` 내부의 같은 오프셋에서
-무작위로 segfault가 납니다 (NVRM Xid 없음, 데이터 의존성 없음). `scripts/run_samsum_with_retry.sh`
-가 `-r <타임스탬프>`로 이어받아 재시도합니다 — OpenCompass가 부분 예측에서 재개하므로
-손실이 없습니다.
-
-**GPU는 하나씩.** 모델이 bf16으로 약 16.7 GB를 쓰므로 24 GB 카드에서 두 실행을 동시에
-띄우면 OOM입니다. 순차로 돌리세요.
-
-**MATH 채점.** `scripts/run_math500_sparse.py`의 답 매칭은 직접 짠 것이라 동치 표현을
-놓칩니다. 결과 json이 예측 텍스트를 그대로 담고 있으므로 `scripts/rescore_math.py`로
-`math_verify` 재채점을 돌리세요 (GPU 불필요, 수 초). 방법론 간 비교는 반드시 재채점 후에
-하십시오 — 라벨에 따라 손해 폭이 달라 순서가 바뀝니다.
-
-**속도.** 재선택 자체는 스텝 하나의 3.5%(8스텝 주기면 평균 0.44%)라 실측 +4%입니다.
-V 오프로딩을 켜면 CPU→GPU 전송 때문에 +11%가 됩니다. pinned memory를 쓰면 더 줄일 수
-있지만 아직 적용하지 않았습니다.
+- scorer는 저장된 은닉 상태가 아니라 `x_at_block_start`를 학습 시점에 재생해서 본다. 그래서 특징이 배포와 정확히 일치한다. 이전 버전은 프롬프트만 있는 forward로 학습하고 프롬프트+생성 forward로 배포했는데, 이 재생이 그 불일치를 없앤다.
+- 프롬프트와 suffix가 하나의 top-k에서 경쟁하므로 예산이 정확히 `후보 수 × keep_ratio`이고, 베이스라인의 계산과 일치한다.
+- lm-eval에 `--use_cache <dir>`을 주면 재개가 된다. 긴 작업에서는 이게 중요하다.

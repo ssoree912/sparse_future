@@ -28,6 +28,23 @@ MATH_INSTRUCTION = ("Please reason step by step, and put your final answer withi
                     "\\boxed{}.")
 
 
+def samsum(limit):
+    """LongBench-style single dialogue, byte-for-byte the format the first 300
+    teacher shards were built with (no chat template, no few-shot block)."""
+    rows = []
+    with open("/workspace/dllm/data/train/samsum/a100_source_train.jsonl") as fh:
+        for i, line in enumerate(fh):
+            if i >= limit:
+                break
+            rows.append(json.loads(line))
+    return [(f"{r['_id']}-1",
+             "Summarize the dialogue into a few short sentences. "
+             "The following are some examples.\n\n"
+             f"Dialogue: {r['context']}\n\n"
+             "Summarize the dialogue into a short summary.")
+            for r in rows]
+
+
 def gsm8k(limit):
     from datasets import Dataset
     path = glob.glob("/workspace/dllm/.hf_cache/datasets/openai___gsm8k/main/*/*/gsm8k-train.arrow")
@@ -108,12 +125,12 @@ def mbpp_full(limit):
             for i, row in enumerate(table.itertuples())]
 
 
-BUILDERS = {"gsm8k": gsm8k, "mmlu": mmlu, "mbpp": mbpp,
+BUILDERS = {"samsum": samsum, "gsm8k": gsm8k, "mmlu": mmlu, "mbpp": mbpp,
             "samsum_lb": samsum_lb, "trec_lb": trec_lb, "wiki2_lb": wiki2_lb,
             "math": math, "mbpp_full": mbpp_full}
 
 # LongBench 계열은 평가 경로가 chat template을 쓰지 않는다.
-RAW_TEXT = {"samsum_lb", "trec_lb", "wiki2_lb"}
+RAW_TEXT = {"samsum", "samsum_lb", "trec_lb", "wiki2_lb"}
 
 
 def main():

@@ -1,7 +1,9 @@
-"""samsum으로만 학습한 scorer가 다른 도메인 라벨을 얼마나 맞추나.
+"""How well a trained scorer reproduces the teacher label, per domain.
 
-학습을 돌리기 전에, 라벨이 정말 도메인 불변인지 값싸게 확인한다.
-recall@k는 train_final_rowmax_student.py와 같은 정의(k∈{5,10,20,30,50}% 평균).
+Cheap check before spending a training run: recall@k against the stored labels,
+averaged over k in {5,10,20,30,50}% - the same definition train_student.py uses
+for checkpoint selection. A random baseline and a pure-recency baseline are
+reported alongside, so the numbers have a floor to be read against.
 """
 import argparse, glob, random, sys, torch
 from pathlib import Path
@@ -21,20 +23,19 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", default="/workspace/dllm/model/LLaDA-8B-Instruct")
     p.add_argument("--student", default="/workspace/dllm/dLLM_f/results/budget/"
-                                        "student_final_rowmax_samsum300/checkpoint-best")
+                                        "student/samsum/checkpoint-best")
     p.add_argument("--root", default="/workspace/dllm/dLLM_f/results/budget")
-    p.add_argument("--datasets", default="samsum300,gsm8k,mmlu,mbpp")
+    p.add_argument("--datasets", default="samsum,gsm8k,mmlu,mbpp")
     p.add_argument("--shards", type=int, default=25)
     p.add_argument("--question-window", type=int, default=128)
-    p.add_argument("--opencompass-root", default="/workspace/dllm/opencompass")
     args = p.parse_args()
 
     torch.set_grad_enabled(False)
     random.seed(0)
-    sys.path.insert(0, args.opencompass_root)
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from transformers import AutoConfig
-    from opencompass.models.sparse_dllm.modeling_llada import LLaDAModelLM, CustomCache
-    from opencompass.models.sparse_dllm.student_cache import load_prompt_utility_student
+    from future_dllm import LLaDAModelLM, CustomCache
+    from future_dllm import load_prompt_utility_student
 
     cfg = AutoConfig.from_pretrained(args.model, trust_remote_code=True)
     cfg.block_len, cfg.kernel_size, cfg.keep_ratio = 32, 3, 1.0
@@ -54,11 +55,11 @@ def main():
         model(x, int(record["block_start"]), 1, cache)
         return cache.layer_hidden_states
 
-    print(f"{'dataset':10s} {'블록':>5s} {'student':>8s} {'무작위':>7s} {'최근성':>7s}")
+    print(f"{'dataset':10s} {'blocks':>7s} {'scorer':>8s} {'random':>8s} {'recency':>8s}")
     for ds in args.datasets.split(","):
-        shards = sorted(glob.glob(f"{args.root}/teacher_final_rowmax_{ds}/*.pt"))[:args.shards]
+        shards = sorted(glob.glob(f"{args.root}/teacher/{ds}/*.pt"))[:args.shards]
         if not shards:
-            print(f"{ds:10s} (shard 없음)")
+            print(f"{ds:10s} (no shards)")
             continue
         stu, rnd, rec, n = [], [], [], 0
         for path in shards:
@@ -81,7 +82,7 @@ def main():
                     rec.append(recall_grid(torch.arange(C, device=device).float(), tgt))
                 n += 1
         m = lambda v: sum(v) / max(1, len(v))
-        print(f"{ds:10s} {n:5d} {m(stu):8.3f} {m(rnd):7.3f} {m(rec):7.3f}", flush=True)
+        print(f"{ds:10s} {n:7d} {m(stu):8.3f} {m(rnd):8.3f} {m(rec):8.3f}", flush=True)
 
 
 if __name__ == "__main__":
